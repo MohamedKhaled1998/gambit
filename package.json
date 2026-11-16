@@ -10,6 +10,7 @@
     "test": "vitest run",
     "dev": "vite build && wrangler dev",
     "build": "vite build",
+    "build:narration": "node scripts/build-narration.mjs",
     "deploy": "node scripts/deploy.mjs"
   },
   "devDependencies": {

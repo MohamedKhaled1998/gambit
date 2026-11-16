@@ -3,6 +3,7 @@ import { MINGLE_MS, SENT_DOWN_MS, UNMASKING_MS, type ClientAction, type GuestVie
 import { ColourStrip, MaskIcon, maskLabel } from "./mask";
 import { rejoinLink } from "./connection";
 import { Caption, PreludeSection } from "./prelude";
+import { useSound } from "./audio";
 import { Talk, type TalkLink } from "./talk";
 
 type Act = (action: ClientAction) => void;
@@ -385,6 +386,7 @@ function Party({ view, code, links, act }: { view: Exclude<GuestView, { phase: "
           </li>
         ))}
       </ul>
+      {!over && <p><InPersonSwitch view={view} act={act} /></p>}
       {!me.unmasked && !over && <button onClick={() => { if (confirm("Leave the party? You'll be unmasked and can only watch.")) act({ type: "leave" }); }}>Leave the party</button>}
       {host && !over && <button onClick={() => { if (confirm("End the game for everyone? No last mask will be crowned.")) act({ type: "endGame" }); }}>End the game</button>}
     </details>
@@ -399,13 +401,25 @@ function Teaching({ announcement, view, now, act, cardOpen }: { announcement: An
   );
 }
 
+/** "I'm with the Host in person": captions only here, with the Host's phone playing the narration and the music. */
+export function InPersonSwitch({ view, act }: { view: GuestView; act: Act }) {
+  if (view.you === view.host) return <p className="hint">Your phone plays the narration and the music for guests with you in person.</p>;
+  return (
+    <label>
+      <input type="checkbox" checked={view.inPerson} onChange={(e) => act({ type: "setInPerson", inPerson: e.target.checked })} /> I'm with the Host in person
+    </label>
+  );
+}
+
 export function Game({ view, offset, act, error, talk, cover, code, links }: { view: Exclude<GuestView, { phase: "foyer" }>; offset: number; act: Act; error: string | null; talk: TalkLink; cover(): void; code: string; links: Record<string, string> }) {
   const now = useServerNow(offset);
+  const notice = useSound(view, now);
   return (
     <div className="salon">
     <main>
       {view.phase !== "lastDance" && view.phase !== "ended" && <PhaseRail phase={view.phase} />}
       <Caption narrator={view.narrator} overtureUntil={view.phase === "mingle" ? view.overtureUntil : null} now={now} />
+      {notice && <p className="notice" role="status">{notice}</p>}
       {view.phase === "mingle" && (
         <>
           <h1>The Mingle</h1>

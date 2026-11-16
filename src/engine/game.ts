@@ -110,6 +110,12 @@ export function apply(state: GameState, action: Action, now: number): ApplyResul
       }
       return { ok: true, state: next };
     }
+    case "setInPerson": {
+      if (!state.guests.some((g) => g.id === action.guest)) return reject("no such guest");
+      const next = structuredClone(state);
+      next.guests.find((g) => g.id === action.guest)!.inPerson = action.inPerson === true;
+      return { ok: true, state: next };
+    }
     case "rejoinLink": {
       if (!state.guests.some((g) => g.id === action.guest)) return reject("no such guest");
       if (action.guest !== state.host) return reject("only the Host can do that");
@@ -524,15 +530,15 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
   if (!me || state.host === null) return null;
   const guests = state.guests.map(({ id, name, mask, unmaskedIn, left }) => ({ id, name, mask: { ...mask }, unmasked: unmaskedIn !== undefined, left: left === true, disconnected: state.absent.includes(id) }));
   const ghost = me.unmaskedIn !== undefined;
-  const seated = { you: guest, host: state.host, guests, rooms: state.rooms.map((r) => ({ id: r.id, members: [...r.members] })), chats: talkSheet(state, guest),
+  const seated = { you: guest, inPerson: me.inPerson === true, host: state.host, guests, rooms: state.rooms.map((r) => ({ id: r.id, members: [...r.members] })), chats: talkSheet(state, guest),
     along: ghost && state.along ? alongView(state.along, guest) : null, predictions: ghost ? predictionsView(state) : null,
     narrator: narratorView(state, guest), prelude: preludeView(state, guest) };
   const def = state.danceDef;
-  const announcement = def && { name: def.name, encore: state.danceEncore, rulesSummary: def.rulesSummary, workedExample: def.workedExample, prelude: def.prelude, masks: !!def.masks };
+  const announcement = def && { id: def.id, name: def.name, encore: state.danceEncore, rulesSummary: def.rulesSummary, workedExample: def.workedExample, prelude: def.prelude, masks: !!def.masks };
   const publicFavours = () => Object.fromEntries(remaining(state).map((g) => [g.id, g.favours]));
   const cellarGame = () => {
     const d = state.cellar!.def;
-    return { name: d.name, encore: state.cellar!.encore, rulesSummary: d.rulesSummary, workedExample: d.workedExample, prelude: d.prelude, masks: !!d.masks };
+    return { id: d.id, name: d.name, encore: state.cellar!.encore, rulesSummary: d.rulesSummary, workedExample: d.workedExample, prelude: d.prelude, masks: !!d.masks };
   };
   switch (state.phase) {
     case "mingle":
@@ -608,7 +614,7 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
         ...seated,
         phase: "lastDance",
         ...lastDanceView(state, guest),
-        announcement: { name: ld.def.name, encore: ld.encore, rulesSummary: ld.def.rulesSummary, workedExample: ld.def.workedExample, prelude: ld.def.prelude, masks: !!ld.def.masks },
+        announcement: { id: ld.def.id, name: ld.def.name, encore: ld.encore, rulesSummary: ld.def.rulesSummary, workedExample: ld.def.workedExample, prelude: ld.def.prelude, masks: !!ld.def.masks },
         buyRate: ld.def.buyRate,
         yourFavours: me.favours,
         favours: over ? publicFavours() : null,

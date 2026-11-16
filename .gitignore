@@ -6,3 +6,5 @@ coverage/
 .DS_Store
 /.sandcastle/
 /.sandcastle-*.md
+.env
+.env.*

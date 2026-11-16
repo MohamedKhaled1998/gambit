@@ -23,7 +23,7 @@ export function narrate(s: GameState, id: LineId, at: number, audience: GuestId[
 export function narratorView(s: GameState, guest: GuestId): NarratorLine | null {
   const n = s.narration;
   if (!n || (n.audience && !n.audience.includes(guest))) return null;
-  return { id: n.id, first: n.first, text: n.first ? NARRATOR[n.id].first : NARRATOR[n.id].short, startedAt: n.startedAt, seconds: n.seconds };
+  return { id: n.id, first: n.first, text: n.first ? NARRATOR[n.id].first : NARRATOR[n.id].short, startedAt: n.startedAt, seconds: n.seconds, everyone: n.audience === null };
 }
 
 /** A Prelude that plays from `startsAt` for the script's length; null for an Encore, which starts as if everyone had skipped. */

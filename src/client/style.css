@@ -48,3 +48,4 @@ ul { list-style: none; padding: 0; } li { display: flex; align-items: center; ga
 .caption { font-style: italic; border-left: 3px solid currentColor; padding: 0.25rem 0.75rem; margin: 0.5rem 0; }
 .prelude { border: 1px dashed currentColor; padding: 0.5rem; margin: 0.5rem 0; }
 .rules-card { border: 1px solid currentColor; padding: 0.5rem 0.75rem; margin: 0.5rem 0; }
+.notice { font-weight: bold; text-align: center; margin: 0.5rem 0; }

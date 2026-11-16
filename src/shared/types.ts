@@ -40,6 +40,8 @@ export interface GuestRecord {
   unmaskedIn?: number;
   /** The guest chose to leave the party: unmasked at once, or when the match they are in ends. */
   left?: boolean;
+  /** "I'm with the Host in person": this phone shows captions and plays no narration or music. Set any time. */
+  inPerson?: boolean;
 }
 
 export const START_FAVOURS = 10;
@@ -511,6 +513,7 @@ export type Action =
   | { type: "predict"; guest: GuestId; picks: GuestId[] }
   | { type: "vote"; guest: GuestId; finalist: GuestId }
   | { type: "skipPrelude"; guest: GuestId }
+  | { type: "setInPerson"; guest: GuestId; inPerson: boolean }
   | { type: "leave"; guest: GuestId }
   | { type: "endGame"; guest: GuestId }
   /** The Host asks for a re-join link for a guest; the state doesn't change, the server issues the seat. */
@@ -659,6 +662,8 @@ export interface NarratorLine {
   text: string;
   startedAt: number;
   seconds: number;
+  /** Every guest hears this line, so a Speaker plays it aloud; otherwise it plays on its guests' own phones only. */
+  everyone: boolean;
 }
 
 /** The Prelude before a match: when it plays, and whether this guest has skipped to the Rules card. */
@@ -669,6 +674,8 @@ export interface PreludeView {
 }
 
 export interface Announcement {
+  /** The match's id: names its Prelude's narration files. */
+  id: string;
   name: string;
   /** Drawn a second time this game: fresh problems, no Prelude. */
   encore: boolean;
@@ -682,6 +689,8 @@ export interface Announcement {
 
 interface Seated {
   you: GuestId;
+  /** Your own in-person switch; never anyone else's. */
+  inPerson: boolean;
   host: GuestId;
   guests: PublicGuest[];
   /** Every Room and who is in it: the "who's talking" screen. */
@@ -896,11 +905,12 @@ export type ClientAction =
   | { type: "predict"; picks: GuestId[] }
   | { type: "vote"; finalist: GuestId }
   | { type: "skipPrelude" }
+  | { type: "setInPerson"; inPerson: boolean }
   | { type: "leave" }
   | { type: "endGame" }
   | { type: "rejoinLink"; target: GuestId };
 
-const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "bid", "claim", "call", "buyPoints", "gift", "openRoom", "leaveRoom", "predict", "vote", "skipPrelude", "leave", "endGame", "rejoinLink"] satisfies ClientAction["type"][];
+const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "bid", "claim", "call", "buyPoints", "gift", "openRoom", "leaveRoom", "predict", "vote", "skipPrelude", "setInPerson", "leave", "endGame", "rejoinLink"] satisfies ClientAction["type"][];
 
 /** True only for the actions a client may send; never `tick`, which only the alarm sends. */
 export function isClientAction(value: unknown): value is ClientAction {

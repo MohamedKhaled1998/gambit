@@ -3,7 +3,8 @@ import { createRoot } from "react-dom/client";
 import { CODE_LENGTH, MAX_GUESTS, MAX_NAME_LENGTH, MIN_GUESTS, CLOSE_NO_SEAT, CLOSE_REMOVED, CLOSE_TAKEN_OVER, type ChatId, type ChatMessage, type GuestView, type SeatGrant } from "../shared/types";
 import { claimRejoinLink, connect, forgetSeat, loadSeat, saveSeat } from "./connection";
 import { MaskIcon } from "./mask";
-import { Game } from "./screens";
+import { Game, InPersonSwitch } from "./screens";
+import { unlockOnFirstTap } from "./audio";
 import { loadRead, saveRead, type Chats, type TalkLink } from "./talk";
 
 function App() {
@@ -109,10 +110,12 @@ function App() {
           </li>
         ))}
       </ul>
+      <p><InPersonSwitch view={view} act={(a) => link.current?.act(a)} /></p>
       {view.canRemove && <button disabled={!view.canStart} onClick={() => link.current?.act({ type: "start" })}>Start ({MIN_GUESTS}-{MAX_GUESTS} guests)</button>}
       {error && <p className="error">{error}</p>}
     </main>
   );
 }
 
+unlockOnFirstTap();
 createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>);
