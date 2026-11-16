@@ -50,6 +50,7 @@ export function newGame(seed: number): GameState {
     gifts: [],
     mingleStandings: {},
     rooms: [],
+    cellarTalks: [],
   };
 }
 
@@ -229,6 +230,7 @@ function tick(state: GameState, now: number): GameState {
       const [race, seed] = startRace(s.seed, c.def, c.guests, at, c.def.steps.cellar!);
       s.seed = seed;
       c.race = race;
+      s.cellarTalks.push({ id: `cellar-${s.round}`, members: [...c.guests] });
       s.match = null;
       s.phase = "cellar";
       s.deadline = race.deadline;
@@ -282,6 +284,12 @@ function unmask(s: GameState, at: number): void {
   c.ranking = rankRace(c.race!);
   c.unmasked = c.unmaskings === 0 ? [] : c.ranking.slice(-c.unmaskings).map((r) => r.guest);
   for (const g of s.guests) if (c.unmasked.includes(g.id)) Object.assign(g, { unmaskedIn: s.round, favours: 0 });
+  for (const room of s.rooms) {
+    const leaving = room.members.filter((m) => c.unmasked.includes(m));
+    if (leaving.length === 0) continue;
+    room.members = room.members.filter((m) => !leaving.includes(m));
+    room.unmasked = [...(room.unmasked ?? []), ...leaving];
+  }
   s.phase = "unmasking";
   s.deadline = at + UNMASKING_MS;
 }
@@ -305,7 +313,7 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
   const me = state.guests.find((g) => g.id === guest);
   if (!me || state.host === null) return null;
   const guests = state.guests.map(({ id, name, mask, unmaskedIn }) => ({ id, name, mask: { ...mask }, unmasked: unmaskedIn !== undefined }));
-  const seated = { you: guest, host: state.host, guests, rooms: state.rooms.map((r) => ({ id: r.id, members: [...r.members] })) };
+  const seated = { you: guest, host: state.host, guests, rooms: state.rooms.map((r) => ({ id: r.id, members: [...r.members] })), chats: talkSheet(state, guest) };
   const def = state.danceDef;
   const announcement = def && { name: def.name, encore: state.danceEncore, rulesSummary: def.rulesSummary, workedExample: def.workedExample };
   const publicFavours = () => Object.fromEntries(remaining(state).map((g) => [g.id, g.favours]));
@@ -379,10 +387,36 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
   }
 }
 
-/** The chats a guest can read and post in: the Table and their Rooms, once the game has started. */
+/**
+ * The chats a guest can read, and whether they can post, once the game has started.
+ * While a Cellar game runs, the Table and every Room mixing the Cellar with free guests are read-only;
+ * Cellar talk is live for the Cellar only; an unmasked guest has read-only history and the Balcony.
+ */
 export function chatAccess(state: GameState, guest: GuestId): ChatAccess {
-  if (state.phase === "foyer" || !remaining(state).some((g) => g.id === guest)) return [];
-  return [{ chat: "table", canPost: true }, ...state.rooms.filter((r) => r.members.includes(guest)).map((r) => ({ chat: r.id, canPost: true }))];
+  const me = state.guests.find((g) => g.id === guest);
+  if (state.phase === "foyer" || !me) return [];
+  const unmasked = me.unmaskedIn !== undefined;
+  const cellarGame = state.phase === "cellar";
+  const down = new Set(state.cellar?.guests ?? []);
+  const mixed = (members: GuestId[]) => cellarGame && members.some((m) => down.has(m)) && members.some((m) => !down.has(m));
+  const access: ChatAccess = [{ chat: "table", canPost: !unmasked && !cellarGame }];
+  for (const r of state.rooms) {
+    if (r.members.includes(guest)) access.push({ chat: r.id, canPost: !mixed(r.members) });
+    else if (r.unmasked?.includes(guest)) access.push({ chat: r.id, canPost: false });
+  }
+  for (const t of state.cellarTalks ?? []) {
+    if (!t.members.includes(guest)) continue;
+    access.push({ chat: t.id, canPost: cellarGame && t.id === `cellar-${state.round}` });
+  }
+  if (unmasked) access.push({ chat: "balcony", canPost: true });
+  return access;
+}
+
+/** What a guest's talk sheet lists: everything they can read, but only Cellar talk while they are in a Cellar game. */
+function talkSheet(state: GameState, guest: GuestId): ChatAccess {
+  const all = chatAccess(state, guest);
+  if (state.phase !== "cellar" || !state.cellar!.guests.includes(guest)) return all;
+  return all.filter((c) => (state.cellarTalks ?? []).some((t) => t.id === c.chat && c.canPost));
 }
 
 /** When the next `tick` is due, or null when nothing is waiting on the clock. */

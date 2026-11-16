@@ -155,6 +155,8 @@ export interface Gift {
 export interface Room {
   id: string;
   members: GuestId[];
+  /** Guests unmasked out of this chat: they keep its history, read-only. Never in a view. */
+  unmasked?: GuestId[];
 }
 
 export interface GameState {
@@ -183,6 +185,8 @@ export interface GameState {
   mingleStandings: Record<GuestId, number>;
   /** Every Room opened this game, in the order opened. */
   rooms: Room[];
+  /** One Cellar talk per Cellar game that has started, for exactly the guests sent down; never in a view. */
+  cellarTalks: Room[];
 }
 
 export type Action =
@@ -262,6 +266,8 @@ interface Seated {
   guests: PublicGuest[];
   /** Every Room and who is in it: the "who's talking" screen. */
   rooms: Room[];
+  /** This guest's own chats and whether they can post in each: `chatAccess`, so the phone holds no rules. */
+  chats: ChatAccess;
 }
 
 export type GuestView =
@@ -333,7 +339,7 @@ export type GuestView =
       favours: Record<GuestId, number>;
     });
 
-/** A chat's id: "table", or a Room's id. */
+/** A chat's id: "table", "balcony", a Room's id, or a Cellar talk's id ("cellar-" and its round). */
 export type ChatId = string;
 
 /** The chats a guest can read; `canPost` is whether they can also post. */

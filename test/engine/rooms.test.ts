@@ -7,10 +7,10 @@ const open = (s: GameState, guest: string, members: string[]) => must(s, { type:
 const roomsOf = (s: GameState, guest: string) => viewFor(s, guest)!.rooms;
 
 describe("The Table", () => {
-  it("is open to every remaining guest to read and post in, in every phase from the Mingle", () => {
+  it("is open to every remaining guest to read, and to post in outside a Cellar game, in every phase from the Mingle", () => {
     let s = started(5);
     for (;;) {
-      for (const g of s.guests.filter((x) => x.unmaskedIn === undefined)) expect(chatAccess(s, g.id)).toContainEqual({ chat: "table", canPost: true });
+      for (const g of s.guests.filter((x) => x.unmaskedIn === undefined)) expect(chatAccess(s, g.id)).toContainEqual({ chat: "table", canPost: s.phase !== "cellar" });
       if (s.phase === "lastDance") break;
       s = s.phase === "dance" || s.phase === "cellar" ? playMatch(s, () => null) : tickToDeadline(s);
     }

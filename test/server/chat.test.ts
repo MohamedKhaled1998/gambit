@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { env } from "cloudflare:workers";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import type { GuestView } from "../../src/shared/types";
 import { Client, chatMessages, startedGame } from "./helpers";
 
 const settle = () => new Promise((r) => setTimeout(r, 150));
@@ -133,4 +136,54 @@ describe("chat history", () => {
     await settle();
     expect(chatMessages(other, "r1")).toEqual([]);
   });
+});
+
+describe("the Balcony over WebSockets", () => {
+  afterEach(() => vi.useRealTimers());
+
+  const alarmTime = (code: string) => runInDurableObject(env.Game.get(env.Game.idFromName(code)), (_, state) => state.storage.getAlarm()) as Promise<number>;
+
+  async function toUnmasking() {
+    const game = await startedGame(7);
+    const host = game.guests[0]!.client;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    // Step the clock from deadline to deadline, as the alarm does; nobody answers.
+    for (let i = 0; i < 100 && host.lastView()?.phase !== "unmasking"; i++) {
+      const next = (host.lastView() as { deadline?: number }).deadline ?? (await alarmTime(game.code));
+      vi.setSystemTime(next + 10);
+      await runDurableObjectAlarm(env.Game.get(env.Game.idFromName(game.code)));
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    expect(host.lastView()?.phase).toBe("unmasking");
+    vi.useRealTimers();
+    const view = host.lastView() as Extract<GuestView, { phase: "unmasking" }>;
+    const out = game.guests.filter((g) => view.unmasked.includes(g.guest));
+    const stay = game.guests.filter((g) => !view.unmasked.includes(g.guest));
+    return { ...game, out, stay };
+  }
+
+  it("is read and posted in by unmasked guests only; no remaining guest receives or loads it", async () => {
+    const { code, out, stay } = await toUnmasking();
+    expect(out.length).toBeGreaterThan(0);
+    const [first, ...rest] = out as [typeof out[0], ...typeof out];
+    first.client.send({ type: "post", chat: "balcony", body: "BALCONYWORD" });
+    for (const g of out) await g.client.until(() => chatMessages(g.client, "balcony").length === 1);
+    for (const g of stay) {
+      g.client.send({ type: "post", chat: "balcony", body: "intruder" });
+      await g.client.until(() => g.client.errors().includes("no such chat"));
+      g.client.send({ type: "loadHistory", chat: "balcony", before: 1000 });
+      await settle();
+      expect(chatMessages(g.client, "balcony")).toEqual([]);
+      const again = await Client.connect(code, g.token);
+      await settle();
+      expect(chatMessages(again, "balcony")).toEqual([]);
+    }
+    for (const g of stay) expect(g.client.messages.every((m) => !JSON.stringify(m).includes("BALCONYWORD"))).toBe(true);
+    // The Table is read-only to the unmasked.
+    first.client.send({ type: "post", chat: "table", body: "hello" });
+    await first.client.until(() => first.client.errors().includes("this chat is read-only"));
+    // A guest reconnecting later gets the Balcony's history.
+    const late = await Client.connect(code, (rest[0] ?? first).token);
+    await late.until(() => chatMessages(late, "balcony").length === 1);
+  }, 20_000);
 });

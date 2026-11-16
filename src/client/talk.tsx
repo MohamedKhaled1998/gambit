@@ -35,11 +35,12 @@ export function isUnread(chats: Chats, lastRead: Record<ChatId, number>, id: Cha
 
 type Seen = Exclude<GuestView, { phase: "foyer" }>;
 
-/** The chats this guest is in: the Table, then their Rooms. Unmasked guests have none yet. */
-function myChats(view: Seen): { id: ChatId; label: string }[] {
-  const mine = view.rooms.filter((r) => r.members.includes(view.you));
-  const names = (r: { members: string[] }) => r.members.filter((m) => m !== view.you).map((m) => view.guests.find((g) => g.id === m)?.name ?? "").join(", ");
-  return [{ id: "table", label: "The Table" }, ...mine.map((r) => ({ id: r.id, label: names(r) }))];
+/** The chats the view lists for this guest, labelled. */
+function myChats(view: Seen): { id: ChatId; label: string; canPost: boolean }[] {
+  const names = (members: string[]) => members.filter((m) => m !== view.you).map((m) => view.guests.find((g) => g.id === m)?.name ?? "").join(", ");
+  const label = (id: ChatId) =>
+    id === "table" ? "The Table" : id === "balcony" ? "The Balcony" : id.startsWith("cellar-") ? "Cellar talk" : names(view.rooms.find((r) => r.id === id)?.members ?? []) || "A Room you left";
+  return view.chats.map((c) => ({ id: c.chat, label: label(c.chat), canPost: c.canPost }));
 }
 
 function Dot({ chats, lastRead, id, you }: { chats: Chats; lastRead: Record<ChatId, number>; id: ChatId; you: string }) {
@@ -79,7 +80,7 @@ function NewRoom({ view, link }: { view: Seen; link: TalkLink }) {
   );
 }
 
-function ChatPane({ view, id, link }: { view: Seen; id: ChatId; link: TalkLink }) {
+function ChatPane({ view, id, link, canPost }: { view: Seen; id: ChatId; link: TalkLink; canPost: boolean }) {
   const [text, setText] = useState("");
   const chat = link.chats[id];
   const name = (g: string) => view.guests.find((x) => x.id === g);
@@ -93,10 +94,10 @@ function ChatPane({ view, id, link }: { view: Seen; id: ChatId; link: TalkLink }
           </li>
         ))}
       </ul>
-      <form onSubmit={(e) => { e.preventDefault(); if (text.trim()) { link.post(id, text); setText(""); } }}>
+      {canPost ? <form onSubmit={(e) => { e.preventDefault(); if (text.trim()) { link.post(id, text); setText(""); } }}>
         <input value={text} maxLength={MAX_MESSAGE_LENGTH} autoComplete="off" onChange={(e) => setText(e.target.value)} />
         <button disabled={!text.trim()}>Send</button>
-      </form>
+      </form> : <p>Read-only.</p>}
     </div>
   );
 }
@@ -122,8 +123,8 @@ export function Talk({ view, link, cover }: { view: Seen; link: TalkLink; cover(
         {shown ? (
           <>
             <button onClick={() => setCurrent(null)}>← Chats</button>
-            {shown !== "table" && <button onClick={() => { link.leaveRoom(shown); setCurrent(null); }}>Leave Room</button>}
-            <ChatPane view={view} id={shown} link={link} />
+            {view.rooms.some((r) => r.id === shown && r.members.includes(view.you)) && <button onClick={() => { link.leaveRoom(shown); setCurrent(null); }}>Leave Room</button>}
+            <ChatPane view={view} id={shown} link={link} canPost={chats.find((c) => c.id === shown)!.canPost} />
           </>
         ) : (
           <>
@@ -132,7 +133,7 @@ export function Talk({ view, link, cover }: { view: Seen; link: TalkLink; cover(
                 <li key={c.id}><button onClick={() => { setCurrent(c.id); link.open(c.id); }}>{c.label}<Dot chats={link.chats} lastRead={link.lastRead} id={c.id} you={view.you} /></button></li>
               ))}
             </ul>
-            <NewRoom view={view} link={link} />
+            {!view.guests.find((g) => g.id === view.you)?.unmasked && <NewRoom view={view} link={link} />}
             <WhoIsTalking view={view} />
           </>
         )}

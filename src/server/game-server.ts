@@ -223,9 +223,11 @@ export class Game extends Server<Cloudflare.Env> {
   // --- the loop: save, send views, set the alarm -------------------------
 
   private commit(state: GameState, version: number): void {
+    const before = this.load()?.state;
     this.save(state, version);
     this.dropRemovedSeats(state);
     this.sendViews(state, version);
+    this.openNewChats(before, state);
     const deadline = nextDeadline(state);
     if (deadline === null) void this.ctx.storage.deleteAlarm();
     else void this.ctx.storage.setAlarm(deadline);
@@ -239,6 +241,17 @@ export class Game extends Server<Cloudflare.Env> {
       for (const c of this.getConnections<ConnState>()) {
         if (c.state?.guest === row.guest) c.close(CLOSE_REMOVED, "removed from the Foyer");
       }
+    }
+  }
+
+  /** A guest who can now read a chat they couldn't (the Balcony at unmasking, a new Room) is sent its latest page. */
+  private openNewChats(before: GameState | undefined, state: GameState): void {
+    if (!before) return;
+    for (const c of this.getConnections<ConnState>()) {
+      const guest = c.state?.guest;
+      if (!guest) continue;
+      const had = new Set(chatAccess(before, guest).map((a) => a.chat));
+      for (const { chat } of chatAccess(state, guest)) if (!had.has(chat)) this.sendPage(c, chat, null);
     }
   }
 
