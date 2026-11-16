@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { MINGLE_MS, SENT_DOWN_MS, UNMASKING_MS, type ClientAction, type GuestView, type StepView, type AlongView, type AuctionView, type BluffView, type PredictionsView, type PredictionsReveal, type PublicGuest, type RankingEntry } from "../shared/types";
 import { ColourStrip, MaskIcon, maskLabel } from "./mask";
+import { rejoinLink } from "./connection";
 import { Talk, type TalkLink } from "./talk";
 
 type Act = (action: ClientAction) => void;
@@ -364,12 +365,39 @@ function PredictionReveal({ reveal, guests }: { reveal: PredictionsReveal; guest
   );
 }
 
-export function Game({ view, offset, act, error, talk, cover }: { view: Exclude<GuestView, { phase: "foyer" }>; offset: number; act: Act; error: string | null; talk: TalkLink; cover(): void }) {
+/** Who is at the party: "left the party" and "disconnected" markers, the leave button and, for the Host, their powers. */
+function Party({ view, code, links, act }: { view: Exclude<GuestView, { phase: "foyer" }>; code: string; links: Record<string, string>; act: Act }) {
+  const me = view.guests.find((g) => g.id === view.you)!;
+  const host = view.you === view.host;
+  const over = view.phase === "ended" || (view.phase === "lastDance" && (view.stage === "ended" || view.stage === "deleted"));
+  return (
+    <details className="party">
+      <summary>The party</summary>
+      <ul>
+        {view.guests.map((g) => (
+          <li key={g.id}>
+            <Name guests={view.guests} id={g.id} />
+            {g.id === view.host && <span> (Host)</span>}
+            {g.left ? <span> · {g.name} left the party.</span> : g.disconnected ? <span className="disconnected"> · disconnected</span> : null}
+            {host && !over && (
+              <button onClick={() => act({ type: "rejoinLink", target: g.id })}>Show re-join link</button>
+            )}
+            {host && links[g.id] && <input readOnly value={rejoinLink(code, links[g.id]!)} onFocus={(e) => e.currentTarget.select()} aria-label={`Re-join link for ${g.name}`} />}
+          </li>
+        ))}
+      </ul>
+      {!me.unmasked && !over && <button onClick={() => { if (confirm("Leave the party? You'll be unmasked and can only watch.")) act({ type: "leave" }); }}>Leave the party</button>}
+      {host && !over && <button onClick={() => { if (confirm("End the game for everyone? No last mask will be crowned.")) act({ type: "endGame" }); }}>End the game</button>}
+    </details>
+  );
+}
+
+export function Game({ view, offset, act, error, talk, cover, code, links }: { view: Exclude<GuestView, { phase: "foyer" }>; offset: number; act: Act; error: string | null; talk: TalkLink; cover(): void; code: string; links: Record<string, string> }) {
   const now = useServerNow(offset);
   return (
     <div className="salon">
     <main>
-      {view.phase !== "lastDance" && <PhaseRail phase={view.phase} />}
+      {view.phase !== "lastDance" && view.phase !== "ended" && <PhaseRail phase={view.phase} />}
       {view.phase === "mingle" && (
         <>
           <h1>The Mingle</h1>
@@ -435,6 +463,16 @@ export function Game({ view, offset, act, error, talk, cover }: { view: Exclude<
         </>
       )}
       {view.phase === "lastDance" && <LastDance view={view} now={now} act={act} />}
+      {view.phase === "ended" && (
+        <>
+          <h1>The party is over</h1>
+          <p>The Host ended the game early. No last mask is crowned.</p>
+          <h2>Final favours</h2>
+          <FavourList view={view} favours={view.favours} />
+          <PredictionReveal reveal={view.reveal} guests={view.guests} />
+        </>
+      )}
+      <Party view={view} code={code} links={links} act={act} />
       <Balcony view={view} now={now} act={act} />
       {error && <p className="error">{error}</p>}
     </main>

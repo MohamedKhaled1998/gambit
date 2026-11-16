@@ -166,7 +166,7 @@ export function castVote(s: GameState, guest: GuestId, finalist: GuestId, now: n
 }
 
 /** Whether the game is finished and its storage due for deletion. */
-export const isDeleted = (s: GameState): boolean => s.lastDance?.stage === "deleted";
+export const isDeleted = (s: GameState): boolean => s.lastDance?.stage === "deleted" || (s.phase === "ended" && s.deadline === null);
 
 /** Who may post on the Table during the Last Dance's addresses: a guest, everyone, or null outside them. */
 export function floorOf(ld: LastDanceState | null): GuestId | "everyone" | null {

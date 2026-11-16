@@ -38,6 +38,8 @@ export interface GuestRecord {
   favours: number;
   /** The round this guest was unmasked in; absent while they remain. */
   unmaskedIn?: number;
+  /** The guest chose to leave the party: unmasked at once, or when the match they are in ends. */
+  left?: boolean;
 }
 
 export const START_FAVOURS = 10;
@@ -365,7 +367,7 @@ export interface LastDanceState {
 }
 
 export interface GameState {
-  phase: "foyer" | "mingle" | "dance" | "sentDown" | "cellar" | "unmasking" | "lastDance";
+  phase: "foyer" | "mingle" | "dance" | "sentDown" | "cellar" | "unmasking" | "lastDance" | "ended";
   format: Format;
   /** Seed state for every random draw; advances as draws are made. */
   seed: number;
@@ -402,6 +404,10 @@ export interface GameState {
   predictions: PredictionRound[];
   /** The Last Dance, from the last unmasking on; null before. */
   lastDance: LastDanceState | null;
+  /** How many guests the round's schedule unmasked when its Mingle opened; leavers use some of them. */
+  planned: number;
+  /** The guests not connected right now, as the server last reported; only a marker, never a rule. */
+  absent: GuestId[];
 }
 
 export type Action =
@@ -418,6 +424,12 @@ export type Action =
   | { type: "leaveRoom"; guest: GuestId; room: string }
   | { type: "predict"; guest: GuestId; picks: GuestId[] }
   | { type: "vote"; guest: GuestId; finalist: GuestId }
+  | { type: "leave"; guest: GuestId }
+  | { type: "endGame"; guest: GuestId }
+  /** The Host asks for a re-join link for a guest; the state doesn't change, the server issues the seat. */
+  | { type: "rejoinLink"; guest: GuestId; target: GuestId }
+  /** Who is connected right now; only the server sends it. */
+  | { type: "presence"; present: GuestId[] }
   /** `present` is who is connected, which only the server knows; left out, every guest counts as present. */
   | { type: "tick"; present?: GuestId[] };
 
@@ -463,7 +475,11 @@ export type Rejection =
   | "only the Jury votes"
   | "the Jury was counted when the vote opened"
   | "name a finalist"
-  | "already voted";
+  | "already voted"
+  | "already unmasked"
+  | "you left the party"
+  | "the last two can't leave before the Last Dance"
+  | "the game has ended";
 
 export type ApplyResult = { ok: true; state: GameState } | { ok: false; reason: Rejection };
 
@@ -473,6 +489,10 @@ export interface PublicGuest {
   mask: Mask;
   /** Unmasked: the mask floats off and the name is written in. */
   unmasked: boolean;
+  /** The guest chose to leave: "Ana left the party." */
+  left: boolean;
+  /** Not connected right now; they play on as "no answer". */
+  disconnected: boolean;
 }
 
 export interface StepView {
@@ -607,6 +627,15 @@ export interface PredictionsReveal {
 }
 
 export type GuestView =
+  | (Seated & {
+      phase: "ended";
+      /** The Host ended the game early: no last mask is crowned. */
+      lastMask: null;
+      /** Everyone's final favours. */
+      favours: Record<GuestId, number>;
+      /** Every prediction, and the Oracle. */
+      reveal: PredictionsReveal;
+    })
   | (Seated & { phase: "foyer"; format: Format; canStart: boolean; canRemove: boolean })
   | (Seated & {
       phase: "mingle";
@@ -725,6 +754,8 @@ export interface ChatMessage {
 export type ServerMessage =
   | { type: "view"; view: GuestView; version: number; build: string; /** Server time when sent, for the client's clock offset. */ now: number }
   | { type: "seat"; guest: GuestId; token: string }
+  /** To the Host only: a fresh seat token for `guest`, to share as a re-join link. */
+  | { type: "rejoin"; guest: GuestId; token: string }
   | { type: "message"; message: ChatMessage }
   /** A page of one chat, oldest first; `more` says whether older messages remain. */
   | { type: "history"; chat: ChatId; messages: ChatMessage[]; more: boolean }
@@ -750,9 +781,12 @@ export type ClientAction =
   | { type: "openRoom"; members: GuestId[] }
   | { type: "leaveRoom"; room: string }
   | { type: "predict"; picks: GuestId[] }
-  | { type: "vote"; finalist: GuestId };
+  | { type: "vote"; finalist: GuestId }
+  | { type: "leave" }
+  | { type: "endGame" }
+  | { type: "rejoinLink"; target: GuestId };
 
-const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "bid", "claim", "call", "buyPoints", "gift", "openRoom", "leaveRoom", "predict", "vote"] satisfies ClientAction["type"][];
+const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "bid", "claim", "call", "buyPoints", "gift", "openRoom", "leaveRoom", "predict", "vote", "leave", "endGame", "rejoinLink"] satisfies ClientAction["type"][];
 
 /** True only for the actions a client may send; never `tick`, which only the alarm sends. */
 export function isClientAction(value: unknown): value is ClientAction {

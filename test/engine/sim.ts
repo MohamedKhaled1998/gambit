@@ -31,11 +31,14 @@ export type Player = (guest: GuestId, step: StepView, rightPosition: number) => 
 /** A scripted bidder: a guest-dependent share of their points, different on every step. */
 const bidFor = (guest: GuestId, step: number, points: number) => Math.min(points, (Number(guest.slice(1)) * 7 + step * 3) % (points + 1));
 
+/** Guests who have left the party take no more part, though the match still lists them. */
+const here = (s: GameState, ids: string[]) => ids.filter((id) => !s.guests.find((g) => g.id === id)?.left);
+
 /** Plays a Sealed bid Dance to its end, every guest bidding by `bidFor`. */
 function playAuction(s: GameState): GameState {
   while (s.phase === "dance") {
     const a = s.auction!;
-    if (a.stage === "bid") for (const id of Object.keys(a.points)) if (s.phase === "dance" && s.auction!.stage === "bid") s = must(s, { type: "bid", guest: id, amount: bidFor(id, a.step, s.auction!.points[id]!) }, a.stepStartedAt + 1000);
+    if (a.stage === "bid") for (const id of here(s, Object.keys(a.points))) if (s.phase === "dance" && s.auction!.stage === "bid") s = must(s, { type: "bid", guest: id, amount: bidFor(id, a.step, s.auction!.points[id]!) }, a.stepStartedAt + 1000);
     s = tickToDeadline(s);
   }
   return s;
@@ -45,7 +48,7 @@ function playAuction(s: GameState): GameState {
 function playBluff(s: GameState): GameState {
   while (s.phase === "dance") {
     const b = s.bluff!;
-    const ids = Object.keys(b.points);
+    const ids = here(s, Object.keys(b.points));
     const t = b.stepStartedAt + 1000;
     if (b.stage === "claim") for (const [i, id] of ids.entries()) s = must(s, { type: "claim", guest: id, value: ((i + b.step * 2) % 9) + 1 }, t);
     if (s.bluff!.stage === "call") for (const [i, id] of ids.entries()) s = must(s, { type: "call", guest: id, target: b.step % 2 ? ids[(i + 1) % ids.length]! : null }, t);
@@ -55,7 +58,7 @@ function playBluff(s: GameState): GameState {
 }
 
 /** The guests playing the running match: everyone in a Dance, the Cellar in a Cellar game. */
-const players = (s: GameState) => Object.keys((s.phase === "dance" ? s.match! : s.cellar!.race!).points);
+const players = (s: GameState) => here(s, Object.keys((s.phase === "dance" ? s.match! : s.cellar!.race!).points));
 
 /** Plays the running match (Dance or Cellar game) to its end with scripted guests. */
 export function playMatch(s: GameState, play: Player): GameState {

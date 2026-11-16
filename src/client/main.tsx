@@ -1,13 +1,14 @@
 import { StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { CODE_LENGTH, MAX_GUESTS, MAX_NAME_LENGTH, MIN_GUESTS, CLOSE_NO_SEAT, CLOSE_REMOVED, CLOSE_TAKEN_OVER, type ChatId, type ChatMessage, type GuestView, type SeatGrant } from "../shared/types";
-import { connect, forgetSeat, loadSeat, saveSeat } from "./connection";
+import { claimRejoinLink, connect, forgetSeat, loadSeat, saveSeat } from "./connection";
 import { MaskIcon } from "./mask";
 import { Game } from "./screens";
 import { loadRead, saveRead, type Chats, type TalkLink } from "./talk";
 
 function App() {
-  const [seat, setSeat] = useState(loadSeat);
+  const [seat, setSeat] = useState(() => { claimRejoinLink(); return loadSeat(); });
+  const [links, setLinks] = useState<Record<string, string>>({});
   const [view, setView] = useState<GuestView | null>(null);
   const [offset, setOffset] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -34,6 +35,7 @@ function App() {
           return { ...c, [chat]: { messages: merged, more: older || !have.length ? more : (c[chat]?.more ?? more) } };
         }),
       onError: setError,
+      onRejoin: (guest: string, token: string) => setLinks((l) => ({ ...l, [guest]: token })),
       onClosed: (c: number) => {
         if (c === CLOSE_NO_SEAT || c === CLOSE_REMOVED) { forgetSeat(); setSeat(null); setView(null); }
         else if (c === CLOSE_TAKEN_OVER) setError("This game is open in another tab.");
@@ -93,7 +95,7 @@ function App() {
     leaveRoom: (room) => link.current?.act({ type: "leaveRoom", room }),
   };
   if (view.phase !== "foyer" && covered) return <main className="cover" onClick={() => setCovered(false)}><p>Notes</p><p>Tap to go back.</p></main>;
-  if (view.phase !== "foyer") return <Game view={view} offset={offset} act={(a) => link.current?.act(a)} error={error} talk={talk} cover={() => setCovered(true)} />;
+  if (view.phase !== "foyer") return <Game view={view} offset={offset} code={seat?.code ?? ""} links={links} act={(a) => link.current?.act(a)} error={error} talk={talk} cover={() => setCovered(true)} />;
   return (
     <main>
       <h1>The Foyer</h1>

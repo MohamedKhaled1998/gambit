@@ -1,6 +1,7 @@
 import { LIBRARY } from "../content/library";
 import {
   DANCE_PAYOUTS,
+  DELETE_AFTER_MS,
   MINGLE_MS,
   QUICK_ROUNDS,
   SENT_DOWN_MS,
@@ -21,6 +22,7 @@ import {
   type GuestId,
   type GuestView,
   type Mask,
+  type RankingEntry,
   type Rejection,
 } from "../shared/types";
 import { advanceAlong, alongDeadline, alongView, startAlong } from "./along";
@@ -60,13 +62,38 @@ export function newGame(seed: number): GameState {
     along: null,
     predictions: [],
     lastDance: null,
+    planned: 0,
+    absent: [],
   };
 }
 
 const reject = (reason: Extract<ApplyResult, { ok: false }>["reason"]): ApplyResult => ({ ok: false, reason });
 
 export function apply(state: GameState, action: Action, now: number): ApplyResult {
+  if (action.type !== "tick" && action.type !== "presence") {
+    if (state.phase === "ended") return reject("the game has ended");
+    // A guest who has left takes no more part, though they stay in the match they are in until it ends.
+    const acting = "guest" in action ? state.guests.find((g) => g.id === action.guest) : undefined;
+    if (acting?.left && acting.unmaskedIn === undefined) return reject("you left the party");
+  }
   switch (action.type) {
+    case "presence":
+      return { ok: true, state: { ...state, absent: state.guests.map((g) => g.id).filter((id) => !action.present.includes(id)) } };
+    case "leave":
+      return leave(state, action.guest, now);
+    case "endGame": {
+      if (!state.guests.some((g) => g.id === action.guest)) return reject("no such guest");
+      if (state.phase === "foyer") return reject("the game hasn't started");
+      if (action.guest !== state.host) return reject("only the Host can do that");
+      if (state.lastDance?.stage === "ended" || state.lastDance?.stage === "deleted") return reject("the game has ended");
+      return { ok: true, state: { ...structuredClone(state), phase: "ended", along: null, deadline: now + DELETE_AFTER_MS } };
+    }
+    case "rejoinLink": {
+      if (!state.guests.some((g) => g.id === action.guest)) return reject("no such guest");
+      if (action.guest !== state.host) return reject("only the Host can do that");
+      if (!state.guests.some((g) => g.id === action.target)) return reject("no such guest");
+      return { ok: true, state };
+    }
     case "tick":
       return { ok: true, state: tick(state, now, action.present) };
     case "answer": {
@@ -304,7 +331,7 @@ function tick(state: GameState, now: number, present?: GuestId[]): GameState {
       const running = s.bluff ?? s.auction ?? s.match!;
       const more = s.bluff ? advanceBluff(s.bluff, at) : s.auction ? advanceAuction(s.auction, at) : advanceRace(s.match!, at);
       if (more) s.deadline = running.deadline;
-      else sendDown(s, at);
+      else s = sendDown(s, at);
     } else if (s.phase === "sentDown") {
       const c = s.cellar!;
       if (c.def.type !== "race") throw new Error(`${c.def.name} can't be a Cellar game`);
@@ -332,9 +359,33 @@ function tick(state: GameState, now: number, present?: GuestId[]): GameState {
 /** The guests already unmasked: they play along with a match that starts now. */
 const unmaskedGuests = (state: GameState): GuestId[] => state.guests.filter((g) => g.unmaskedIn !== undefined).map((g) => g.id);
 
+/** A guest who left but is still in the running match ranks last in it. */
+function leaversLast(s: GameState, ranking: RankingEntry[]): RankingEntry[] {
+  const left = (r: RankingEntry) => s.guests.find((g) => g.id === r.guest)?.left === true && s.guests.find((g) => g.id === r.guest)?.unmaskedIn === undefined;
+  return [...ranking.filter((r) => !left(r)), ...ranking.filter(left)];
+}
+
+/** The guests lose their place for good: their mask floats off, their favours vanish and they leave every Room. */
+function depart(s: GameState, ids: GuestId[]): void {
+  for (const g of s.guests) if (ids.includes(g.id)) Object.assign(g, { unmaskedIn: s.round, favours: 0 });
+  for (const room of s.rooms) {
+    const going = room.members.filter((m) => ids.includes(m));
+    if (going.length === 0) continue;
+    room.members = room.members.filter((m) => !going.includes(m));
+    room.unmasked = [...(room.unmasked ?? []), ...going];
+  }
+}
+
+/** The Host role goes to the earliest-joined guest still in the game (unmasked counts) when the Host leaves. */
+function passHost(s: GameState, leaver: GuestId): void {
+  if (s.host !== leaver) return;
+  const next = s.guests.filter((g) => !g.left && g.id !== leaver).sort((a, b) => a.joinedAt - b.joinedAt)[0];
+  if (next) s.host = next.id;
+}
+
 /** The Dance's strict ranking sets the payout (favours never go below 0), then the lower half is sent down. */
-function sendDown(s: GameState, at: number): void {
-  const ranking = s.bluff ? rankBluff(s.bluff) : s.auction ? rankAuction(s.auction) : rankRace(s.match!);
+function sendDown(s: GameState, at: number): GameState {
+  const ranking = leaversLast(s, s.bluff ? rankBluff(s.bluff) : s.auction ? rankAuction(s.auction) : rankRace(s.match!));
   const table = DANCE_PAYOUTS[ranking.length]!;
   const payout: Record<GuestId, number> = {};
   ranking.forEach((r, i) => {
@@ -346,9 +397,14 @@ function sendDown(s: GameState, at: number): void {
   if (s.along) s.along.done = true;
   s.auction = null;
   s.bluff = null;
+  // A guest who left takes the bottom payout and is gone before guests are sent down.
+  depart(s, remaining(s).filter((g) => g.left).map((g) => g.id));
 
   const left = remaining(s);
-  const unmaskings = unmaskingsFor({ remaining: left.length, unmaskings: left.length - 2, rounds: s.rounds - s.round + 1 });
+  if (left.length <= 2) return openLastDance(s, at);
+  // The round's planned unmaskings, less the ones leavers have used.
+  const leavers = s.guests.filter((g) => g.left && g.unmaskedIn === s.round).length;
+  const unmaskings = Math.max(0, Math.min(s.planned - leavers, left.length - 2));
   const size = cellarSize(left.length, unmaskings);
   // Fewest favours first; on equal favours the lower Dance place goes down first.
   const place = (id: GuestId) => ranking.findIndex((r) => r.guest === id);
@@ -364,6 +420,7 @@ function sendDown(s: GameState, at: number): void {
   if (unmaskings > 0) s.predictions.push({ round: s.round, cellar: [...down], unmaskings, picks: {}, unmasked: null });
   s.phase = "sentDown";
   s.deadline = at + SENT_DOWN_MS;
+  return s;
 }
 
 function failNoCellarGame(size: number): never {
@@ -373,17 +430,13 @@ function failNoCellarGame(size: number): never {
 /** The Cellar game's lowest-ranked are unmasked: their mask floats off and their favours vanish. */
 function unmask(s: GameState, at: number): void {
   const c = s.cellar!;
-  c.ranking = rankRace(c.race!);
-  c.unmasked = c.unmaskings === 0 ? [] : c.ranking.slice(-c.unmaskings).map((r) => r.guest);
+  c.ranking = leaversLast(s, rankRace(c.race!));
+  // A leaver in the Cellar ranks last and is one of the unmaskings; the round unmasks more only when leavers outnumber them.
+  const count = Math.max(c.unmaskings, c.ranking.filter((r) => s.guests.find((g) => g.id === r.guest)!.left).length);
+  c.unmasked = count === 0 ? [] : c.ranking.slice(-count).map((r) => r.guest);
   const predicted = s.predictions.find((p) => p.round === s.round);
   if (predicted) predicted.unmasked = [...c.unmasked];
-  for (const g of s.guests) if (c.unmasked.includes(g.id)) Object.assign(g, { unmaskedIn: s.round, favours: 0 });
-  for (const room of s.rooms) {
-    const leaving = room.members.filter((m) => c.unmasked.includes(m));
-    if (leaving.length === 0) continue;
-    room.members = room.members.filter((m) => !leaving.includes(m));
-    room.unmasked = [...(room.unmasked ?? []), ...leaving];
-  }
+  depart(s, c.unmasked);
   if (s.along) s.along.done = true;
   s.phase = "unmasking";
   s.deadline = at + UNMASKING_MS;
@@ -391,7 +444,7 @@ function unmask(s: GameState, at: number): void {
 
 /** After the unmasking: round N+1's Mingle, or the Last Dance once the rounds are done. */
 function nextRound(s: GameState, at: number): GameState {
-  if (s.round >= s.rounds) return openLastDance(s, at);
+  if (s.round >= s.rounds || remaining(s).length <= 2) return openLastDance(s, at);
   const next = drawDance({ ...s, round: s.round + 1 });
   if (!next) throw new Error("the library has no Dance for the guests left");
   return openMingle(next, at);
@@ -400,14 +453,16 @@ function nextRound(s: GameState, at: number): GameState {
 /** Opens the round's Mingle; its standings are the totals as they stand now. */
 function openMingle(s: GameState, at: number): GameState {
   const mingleStandings = Object.fromEntries(remaining(s).map((g) => [g.id, g.favours]));
-  return { ...s, phase: "mingle", deadline: at + MINGLE_MS, mingleStandings };
+  const here = remaining(s).length;
+  const planned = unmaskingsFor({ remaining: here, unmaskings: here - 2, rounds: s.rounds - s.round + 1 });
+  return { ...s, phase: "mingle", deadline: at + MINGLE_MS, mingleStandings, planned };
 }
 
 /** Everything a guest may see; null for someone who has no seat. */
 export function viewFor(state: GameState, guest: GuestId): GuestView | null {
   const me = state.guests.find((g) => g.id === guest);
   if (!me || state.host === null) return null;
-  const guests = state.guests.map(({ id, name, mask, unmaskedIn }) => ({ id, name, mask: { ...mask }, unmasked: unmaskedIn !== undefined }));
+  const guests = state.guests.map(({ id, name, mask, unmaskedIn, left }) => ({ id, name, mask: { ...mask }, unmasked: unmaskedIn !== undefined, left: left === true, disconnected: state.absent.includes(id) }));
   const ghost = me.unmaskedIn !== undefined;
   const seated = { you: guest, host: state.host, guests, rooms: state.rooms.map((r) => ({ id: r.id, members: [...r.members] })), chats: talkSheet(state, guest),
     along: ghost && state.along ? alongView(state.along, guest) : null, predictions: ghost ? predictionsView(state) : null };
@@ -440,7 +495,7 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
         step: race && playing ? stepView(race, guest) : null,
         auction: auction && playing ? auctionView(auction, guest) : null,
         bluff: bluff && playing ? bluffView(bluff, guest) : null,
-        ranking: bluff ? rankBluff(bluff) : auction ? rankAuction(auction) : rankRace(race!),
+        ranking: leaversLast(state, bluff ? rankBluff(bluff) : auction ? rankAuction(auction) : rankRace(race!)),
       };
     }
     case "sentDown":
@@ -469,7 +524,7 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
         announcement: cellarGame(),
         buyRate: c.def.buyRate,
         step: guest in c.race!.points ? stepView(c.race!, guest) : null,
-        ranking: rankRace(c.race!),
+        ranking: leaversLast(state, rankRace(c.race!)),
       };
     }
     case "unmasking":
@@ -497,6 +552,8 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
         reveal: over ? predictionsReveal(state) : null,
       };
     }
+    case "ended":
+      return { ...seated, phase: "ended", lastMask: null, favours: publicFavours(), reveal: predictionsReveal(state) };
     case "foyer":
       return { ...seated, phase: "foyer", format: state.format, canStart: guest === state.host && fitsFormat(state), canRemove: guest === state.host };
   }
@@ -540,4 +597,67 @@ function talkSheet(state: GameState, guest: GuestId): ChatAccess {
 export function nextDeadline(state: GameState): number | null {
   const own = alongDeadline(state.along);
   return own === null ? state.deadline : state.deadline === null ? own : Math.min(own, state.deadline);
+}
+
+/** A guest leaves the party: an unmasking, at once or when the match they are in ends. */
+function leave(state: GameState, id: GuestId, now: number): ApplyResult {
+  const me = state.guests.find((g) => g.id === id);
+  if (!me) return reject("no such guest");
+  if (state.phase === "foyer") return reject("the game hasn't started");
+  if (me.unmaskedIn !== undefined) return reject("already unmasked");
+  const ld = state.lastDance;
+  if (state.phase === "lastDance" && ld!.stage !== "intro" && ld!.stage !== "match" && ld!.stage !== "winnerFloor" && ld!.stage !== "loserFloor" && ld!.stage !== "questions" && ld!.stage !== "vote")
+    return reject("the game has ended");
+  if (state.phase !== "lastDance" && remaining(state).filter((g) => !g.left).length <= 2) return reject("the last two can't leave before the Last Dance");
+
+  const s = structuredClone(state);
+  const gone = s.guests.find((g) => g.id === id)!;
+  gone.left = true;
+  passHost(s, id);
+
+  if (s.phase === "lastDance") {
+    // A finalist who leaves hands the other the win at once: no Jury vote, the predictions still revealed.
+    const l = s.lastDance!;
+    depart(s, [id]);
+    l.matchWinner = l.finalists.find((f) => f !== id)!;
+    l.matchLoser = id;
+    l.lastMask = l.matchWinner;
+    l.stage = "ended";
+    l.endedAt = now;
+    if (s.along) s.along.done = true;
+    s.deadline = now + DELETE_AFTER_MS;
+    return { ok: true, state: s };
+  }
+  // A guest in the running match ranks last in it and goes when it ends.
+  const c = s.cellar;
+  if (s.phase === "dance" || (s.phase === "cellar" && c!.guests.includes(id))) return { ok: true, state: s };
+
+  depart(s, [id]);
+  if (s.phase === "mingle") {
+    delete s.mingleStandings[id];
+    if (remaining(s).length <= 2) return { ok: true, state: openLastDance(s, now) };
+    return { ok: true, state: refitDance(s) };
+  }
+  if (s.phase === "sentDown" || s.phase === "cellar") {
+    // The leaver used one of this round's unmaskings; a Cellar still always holds more guests than it unmasks.
+    c!.guests = c!.guests.filter((g) => g !== id);
+    c!.unmaskings = Math.max(0, c!.unmaskings - 1);
+    const round = s.predictions.find((p) => p.round === s.round);
+    if (round && s.phase === "sentDown") {
+      round.cellar = round.cellar.filter((g) => g !== id);
+      round.unmaskings = c!.unmaskings;
+      round.picks = {};
+      if (round.unmaskings === 0) s.predictions = s.predictions.filter((p) => p !== round);
+    }
+  }
+  return { ok: true, state: s };
+}
+
+/** Draws the round's Dance again when the guests left no longer fit the one announced. */
+function refitDance(s: GameState): GameState {
+  const range = s.danceDef!.guestRange.dance;
+  const count = remaining(s).length;
+  if (range && count >= range[0] && count <= range[1]) return s;
+  const drawn = s.drawn.filter((d) => !(d.round === s.round && d.role === "dance"));
+  return drawDance({ ...s, drawn }) ?? s;
 }

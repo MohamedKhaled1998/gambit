@@ -14,6 +14,15 @@ export const loadSeat = (): Stored | null => {
   }
 };
 export const saveSeat = (seat: Stored): void => localStorage.setItem(STORAGE_KEY, JSON.stringify(seat));
+/** A re-join link the Host showed carries a seat: `?rejoin=CODE.TOKEN`. Taking it saves the seat and cleans the address. */
+export function claimRejoinLink(): void {
+  const params = new URLSearchParams(location.search);
+  const [code, token] = (params.get("rejoin") ?? "").split(".");
+  if (!code || !token) return;
+  saveSeat({ code, token });
+  history.replaceState(null, "", location.pathname);
+}
+export const rejoinLink = (code: string, token: string): string => `${location.origin}/?rejoin=${encodeURIComponent(code)}.${encodeURIComponent(token)}`;
 export const forgetSeat = (): void => localStorage.removeItem(STORAGE_KEY);
 
 export interface Handlers {
@@ -23,6 +32,8 @@ export interface Handlers {
   /** A page of one chat, oldest first. */
   onHistory(chat: ChatId, messages: ChatMessage[], more: boolean): void;
   onError(reason: string): void;
+  /** The Host asked for a re-join link: this guest's fresh token. */
+  onRejoin(guest: string, token: string): void;
   onClosed(code: number): void;
 }
 
@@ -44,6 +55,7 @@ export function connect(code: string, token: string | null, handlers: Handlers, 
       }
       handlers.onView(message.view, message.now - Date.now());
     } else if (message.type === "seat") saveSeat({ code, token: message.token });
+    else if (message.type === "rejoin") handlers.onRejoin(message.guest, message.token);
     else if (message.type === "message") handlers.onMessage(message.message);
     else if (message.type === "history") handlers.onHistory(message.chat, message.messages, message.more);
     else handlers.onError(message.reason);

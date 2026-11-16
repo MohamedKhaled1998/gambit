@@ -121,8 +121,23 @@ export class Game extends Server<Cloudflare.Env> {
     }
     this.takeOver(seat.guest, connection.id);
     connection.setState({ guest: seat.guest, viewHash: null });
-    this.sendViews(loaded.state, loaded.version);
+    this.syncPresence(loaded);
+    const now = this.load()!;
+    this.sendViews(now.state, now.version);
     for (const { chat } of chatAccess(loaded.state, seat.guest)) this.sendPage(connection, chat, null);
+  }
+
+  async onClose(connection: Connection<ConnState>): Promise<void> {
+    const loaded = this.load();
+    if (loaded) this.syncPresence(loaded, connection.id);
+  }
+
+  /** Tells the game who is connected, so absent guests show as disconnected; the game itself never acts on it. */
+  private syncPresence(loaded: { state: GameState; version: number }, except?: string): void {
+    const present = [...new Set([...this.getConnections<ConnState>()].flatMap((c) => (c.id !== except && c.state?.guest ? [c.state.guest] : [])))];
+    const result = apply(loaded.state, { type: "presence", present }, Date.now());
+    if (!result.ok || JSON.stringify(result.state.absent) === JSON.stringify(loaded.state.absent)) return;
+    this.commit(result.state, loaded.version + 1);
   }
 
   // --- chat: outside the game state, delivered to a chat's members only ---
@@ -168,7 +183,8 @@ export class Game extends Server<Cloudflare.Env> {
     }
     const guest = connection.state?.guest ?? null;
     // Hash a would-be seat's token before loading: no await between load and commit.
-    const seat = message.type === "join" && !guest ? await this.newSeat() : null;
+    const wantsSeat = message.type === "join" ? !guest : message.type === "action" && (message.action as { type?: string } | undefined)?.type === "rejoinLink";
+    const seat = wantsSeat ? await this.newSeat() : null;
     const loaded = this.load();
     if (!loaded) return this.send(connection, { type: "error", reason: "no such game" });
 
@@ -207,6 +223,12 @@ export class Game extends Server<Cloudflare.Env> {
       const result = apply(loaded.state, action, now);
       if (!result.ok) return this.send(connection, { type: "error", reason: result.reason });
       this.sql`INSERT INTO actions (id, guest, action, at) VALUES (${message.id}, ${guest}, ${JSON.stringify(action)}, ${now})`;
+      if (action.type === "rejoinLink" && seat) {
+        // The target's old token stops working; the Host alone is told the new one.
+        this.storeSeat(action.target, seat.hash);
+        for (const c of this.getConnections<ConnState>()) if (c.state?.guest === action.target) c.close(CLOSE_NO_SEAT, "this seat has a new token");
+        return this.send(connection, { type: "rejoin", guest: action.target, token: seat.token });
+      }
       this.commit(result.state, loaded.version + 1);
     }
   }
