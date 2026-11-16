@@ -6,3 +6,9 @@ input, button { font: inherit; padding: .6rem .8rem; margin: .25rem 0; border: 1
 button { cursor: pointer; } button:disabled { opacity: .4; cursor: default; }
 ul { list-style: none; padding: 0; } li { display: flex; align-items: center; gap: .75rem; padding: .4rem 0; border-bottom: 1px solid #ffffff22; }
 .error { color: var(--red); }
+.rail { display: flex; gap: .5rem; padding: 0; margin: 0 0 1rem; } .rail li { flex: 1; border: 0; border-bottom: 3px solid #ffffff22; padding: .3rem 0; font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; opacity: .5; }
+.rail .here { border-color: var(--gold); opacity: 1; } .rail .done { border-color: var(--silver); }
+.candle { display: flex; align-items: flex-end; gap: .5rem; } .wax { width: 1rem; height: 3rem; background: #ffffff18; display: flex; align-items: flex-end; } .wax div { width: 100%; background: var(--gold); transition: height .2s linear; }
+.prompt { font-size: 2.2rem; text-align: center; } .choices { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; } .choices button { font-size: 1.4rem; padding: 1rem; }
+.choices .picked { background: var(--sapphire); } .choices .right { background: var(--emerald); } .choices .wrong { background: var(--red); }
+.ranking { padding: 0; } .ranking li { counter-increment: none; } .ranking .me { color: var(--gold); }

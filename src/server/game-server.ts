@@ -208,7 +208,7 @@ export class Game extends Server<Cloudflare.Env> {
       const hash = hashView(JSON.stringify(view));
       if (c.state?.viewHash === hash) continue;
       c.setState({ guest, viewHash: hash });
-      this.send(c, { type: "view", view, version, build: this.env.BUILD_ID });
+      this.send(c, { type: "view", view, version, build: this.env.BUILD_ID, now: Date.now() });
     }
   }
 }

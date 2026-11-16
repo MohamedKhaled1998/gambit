@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GuestView } from "../../src/shared/types";
 import { env } from "cloudflare:workers";
-import { abortAllDurableObjects } from "cloudflare:test";
+import { abortAllDurableObjects, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { createGame } from "../../src/server/create";
 import { Client, createGameOverHttp } from "./helpers";
 
@@ -43,7 +44,7 @@ describe("the Foyer over WebSockets", () => {
     for (const n of ["Bo", "Cy", "Di"]) await (await Client.connect(grant.code)).join(grant.code, n);
     await host.until(() => (host.lastView()?.guests.length ?? 0) === 4);
     host.send({ type: "action", id: "s1", action: { type: "start" } });
-    await host.until(() => host.lastView()?.phase === "started");
+    await host.until(() => host.lastView()?.phase === "mingle");
     const late = await Client.connect(grant.code);
     await late.until(() => late.errors().includes("doors are closed"));
     expect(late.lastView()).toBeUndefined();
@@ -165,5 +166,73 @@ describe("the loop", () => {
     const host = await Client.connect(grant.code, grant.token);
     host.send({ type: "action", id: "t", action: { type: "tick" } });
     await host.until(() => host.errors().includes("unknown action"));
+  });
+});
+
+describe("the clock", () => {
+  async function startedGame() {
+    const grant = await createGameOverHttp("Ana");
+    const host = await Client.connect(grant.code, grant.token);
+    const others = [];
+    for (const n of ["Bo", "Cy", "Di"]) others.push(await (await Client.connect(grant.code)).join(grant.code, n));
+    await host.until(() => (host.lastView()?.guests.length ?? 0) === 4);
+    host.send({ type: "action", id: "s", action: { type: "start" } });
+    await host.until(() => host.lastView()?.phase === "mingle");
+    return { grant, host, others };
+  }
+  const alarmOf = (code: string) =>
+    runInDurableObject(env.Game.get(env.Game.idFromName(code)), async (_i, state) => state.storage.getAlarm());
+
+  afterEach(() => vi.useRealTimers());
+
+  it("keeps one alarm on the Mingle's deadline and stamps views with the server's time", async () => {
+    const { grant, host } = await startedGame();
+    const view = host.views().at(-1)!;
+    const mingle = view.view as Extract<GuestView, { phase: "mingle" }>;
+    expect(await alarmOf(grant.code)).toBe(mingle.deadline);
+    expect(Math.abs(view.now - Date.now())).toBeLessThan(5000);
+  });
+
+  it("fires a tick at the earliest deadline that moves the Mingle into the Dance and re-sets the alarm", async () => {
+    const { grant, host } = await startedGame();
+    const mingle = host.lastView() as Extract<GuestView, { phase: "mingle" }>;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(mingle.deadline + 10);
+    await runDurableObjectAlarm(env.Game.get(env.Game.idFromName(grant.code)));
+    await host.until(() => host.lastView()?.phase === "dance");
+    const dance = host.lastView() as Extract<GuestView, { phase: "dance" }>;
+    expect(dance.step.index).toBe(0);
+    expect(await alarmOf(grant.code)).toBe(dance.step.answerDeadline);
+  });
+
+  it("accepts an answer before the deadline by server time, once, and rejects one after it", async () => {
+    const { grant, host, others } = await startedGame();
+    const mingle = host.lastView() as Extract<GuestView, { phase: "mingle" }>;
+    const stub = env.Game.get(env.Game.idFromName(grant.code));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(mingle.deadline + 10);
+    await runDurableObjectAlarm(stub);
+    await host.until(() => host.lastView()?.phase === "dance");
+    host.send({ type: "action", id: "a1", action: { type: "answer", position: 1 } });
+    await host.until(() => (host.lastView() as { step?: { yourAnswer: number | null } }).step?.yourAnswer === 1);
+    // Another guest's view never carries it.
+    expect((others[0]!.client.lastView() as Extract<GuestView, { phase: "dance" }>).step.yourAnswer).toBeNull();
+    host.send({ type: "action", id: "a2", action: { type: "answer", position: 2 } });
+    await host.until(() => host.errors().includes("already answered"));
+    vi.setSystemTime(mingle.deadline + 20_000);
+    others[1]!.client.send({ type: "action", id: "late", action: { type: "answer", position: 0 } });
+    await others[1]!.client.until(() => others[1]!.client.errors().includes("too late"));
+  });
+
+  it("buys points with favours over the socket", async () => {
+    const { grant, host } = await startedGame();
+    const mingle = host.lastView() as Extract<GuestView, { phase: "mingle" }>;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(mingle.deadline + 10);
+    await runDurableObjectAlarm(env.Game.get(env.Game.idFromName(grant.code)));
+    await host.until(() => host.lastView()?.phase === "dance");
+    host.send({ type: "action", id: "b", action: { type: "buyPoints", favours: 2 } });
+    await host.until(() => (host.lastView() as { favours?: number }).favours === 8);
+    expect((host.lastView() as Extract<GuestView, { phase: "dance" }>).ranking.find((r) => r.guest === grant.guest)!.points).toBe(10);
   });
 });

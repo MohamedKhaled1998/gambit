@@ -17,7 +17,8 @@ export const saveSeat = (seat: Stored): void => localStorage.setItem(STORAGE_KEY
 export const forgetSeat = (): void => localStorage.removeItem(STORAGE_KEY);
 
 export interface Handlers {
-  onView(view: GuestView): void;
+  /** `offset` is server time minus this phone's time, measured when the view arrived. */
+  onView(view: GuestView, offset: number): void;
   onError(reason: string): void;
   onClosed(code: number): void;
 }
@@ -38,7 +39,7 @@ export function connect(code: string, token: string | null, handlers: Handlers, 
         location.reload();
         return;
       }
-      handlers.onView(message.view);
+      handlers.onView(message.view, message.now - Date.now());
     } else if (message.type === "seat") saveSeat({ code, token: message.token });
     else handlers.onError(message.reason);
   };

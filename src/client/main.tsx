@@ -3,10 +3,12 @@ import { createRoot } from "react-dom/client";
 import { CODE_LENGTH, MAX_GUESTS, MAX_NAME_LENGTH, MIN_GUESTS, CLOSE_NO_SEAT, CLOSE_REMOVED, CLOSE_TAKEN_OVER, type GuestView, type SeatGrant } from "../shared/types";
 import { connect, forgetSeat, loadSeat, saveSeat } from "./connection";
 import { MaskIcon } from "./mask";
+import { Game } from "./screens";
 
 function App() {
   const [seat, setSeat] = useState(loadSeat);
   const [view, setView] = useState<GuestView | null>(null);
+  const [offset, setOffset] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [code, setCode] = useState(new URLSearchParams(location.search).get("code") ?? "");
@@ -17,7 +19,7 @@ function App() {
     const target = seat ? { code: seat.code, token: seat.token, join: undefined } : pendingJoin ? { code: pendingJoin.code, token: null, join: pendingJoin.name } : null;
     if (!target) return;
     const handlers = {
-      onView: (v: GuestView) => { setError(null); setView(v); },
+      onView: (v: GuestView, o: number) => { setError(null); setOffset(o); setView(v); },
       onError: setError,
       onClosed: (c: number) => {
         if (c === CLOSE_NO_SEAT || c === CLOSE_REMOVED) { forgetSeat(); setSeat(null); setView(null); }
@@ -56,14 +58,7 @@ function App() {
   }
   if (!view) return <main><p>Taking your seat…</p>{error && <p className="error">{error}</p>}</main>;
 
-  if (view.phase === "started") {
-    return (
-      <main>
-        <h1>The game has started</h1>
-        <ul>{view.guests.map((g) => <li key={g.id}><MaskIcon mask={g.mask} />{g.name}</li>)}</ul>
-      </main>
-    );
-  }
+  if (view.phase !== "foyer") return <Game view={view} offset={offset} act={(a) => link.current?.act(a)} error={error} />;
   return (
     <main>
       <h1>The Foyer</h1>

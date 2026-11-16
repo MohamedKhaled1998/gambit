@@ -89,7 +89,7 @@ describe("the Foyer", () => {
   it("starts only with 4-10 guests and only from the Host", () => {
     expect(apply(foyerWith(3), { type: "start", guest: "g0" }, 0)).toEqual({ ok: false, reason: "need 4-10 guests to start" });
     expect(apply(foyerWith(4), { type: "start", guest: "g1" }, 0)).toEqual({ ok: false, reason: "only the Host can do that" });
-    for (const n of [4, 7, 10]) expect(must(foyerWith(n), { type: "start", guest: "g0" }).phase).toBe("started");
+    for (const n of [4, 7, 10]) expect(must(foyerWith(n), { type: "start", guest: "g0" }).phase).toBe("mingle");
   });
 
   it("tells the Host whether the start button is enabled", () => {
@@ -113,7 +113,7 @@ describe("the Foyer", () => {
     expect(apply(started, { type: "join", guest: "late", name: "Late" }, 0)).toEqual({ ok: false, reason: "doors are closed" });
     expect(apply(started, { type: "removeGuest", guest: "g0", target: "g1" }, 0)).toEqual({ ok: false, reason: "the game has started" });
     expect(apply(started, { type: "start", guest: "g0" }, 0)).toEqual({ ok: false, reason: "the game has started" });
-    expect(viewFor(started, "g2")).toMatchObject({ phase: "started", you: "g2" });
+    expect(viewFor(started, "g2")).toMatchObject({ phase: "mingle", you: "g2" });
     expect(viewFor(started, "g2")!.guests).toHaveLength(4);
   });
 
@@ -121,7 +121,7 @@ describe("the Foyer", () => {
     expect(apply(foyerWith(2), { type: "join", guest: "g0", name: "Again" }, 0)).toEqual({ ok: false, reason: "already joined" });
   });
 
-  it("has no deadline and no chats yet, and a tick changes nothing", () => {
+  it("has no deadline and no chats in the Foyer, and a tick changes nothing", () => {
     const s = foyerWith(4);
     expect(nextDeadline(s)).toBeNull();
     expect(chatAccess(s, "g0")).toEqual([]);
