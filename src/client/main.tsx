@@ -1,9 +1,10 @@
 import { StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { CODE_LENGTH, MAX_GUESTS, MAX_NAME_LENGTH, MIN_GUESTS, CLOSE_NO_SEAT, CLOSE_REMOVED, CLOSE_TAKEN_OVER, type GuestView, type SeatGrant } from "../shared/types";
+import { CODE_LENGTH, MAX_GUESTS, MAX_NAME_LENGTH, MIN_GUESTS, CLOSE_NO_SEAT, CLOSE_REMOVED, CLOSE_TAKEN_OVER, type ChatId, type ChatMessage, type GuestView, type SeatGrant } from "../shared/types";
 import { connect, forgetSeat, loadSeat, saveSeat } from "./connection";
 import { MaskIcon } from "./mask";
 import { Game } from "./screens";
+import { loadRead, saveRead, type Chats, type TalkLink } from "./talk";
 
 function App() {
   const [seat, setSeat] = useState(loadSeat);
@@ -13,6 +14,9 @@ function App() {
   const [name, setName] = useState("");
   const [code, setCode] = useState(new URLSearchParams(location.search).get("code") ?? "");
   const [pendingJoin, setPendingJoin] = useState<{ code: string; name: string } | null>(null);
+  const [chats, setChats] = useState<Chats>({});
+  const [lastRead, setLastRead] = useState<Record<ChatId, number>>({});
+  const [covered, setCovered] = useState(false);
   const link = useRef<ReturnType<typeof connect> | null>(null);
 
   useEffect(() => {
@@ -20,6 +24,15 @@ function App() {
     if (!target) return;
     const handlers = {
       onView: (v: GuestView, o: number) => { setError(null); setOffset(o); setView(v); },
+      onMessage: (m: ChatMessage) => setChats((c) => ({ ...c, [m.chat]: { more: c[m.chat]?.more ?? false, messages: [...(c[m.chat]?.messages ?? []).filter((x) => x.seq !== m.seq), m].sort((a, b) => a.seq - b.seq) } })),
+      onHistory: (chat: ChatId, messages: ChatMessage[], more: boolean) =>
+        setChats((c) => {
+          const have = c[chat]?.messages ?? [];
+          // The latest page replaces what a reconnect left stale; an older page joins the front.
+          const older = have.length > 0 && messages.length > 0 && messages.at(-1)!.seq < have[0]!.seq;
+          const merged = older ? [...messages, ...have] : messages.length > 0 && have.some((x) => x.seq > messages.at(-1)!.seq) ? [...messages, ...have.filter((x) => x.seq > messages.at(-1)!.seq)] : messages;
+          return { ...c, [chat]: { messages: merged, more: older || !have.length ? more : (c[chat]?.more ?? more) } };
+        }),
       onError: setError,
       onClosed: (c: number) => {
         if (c === CLOSE_NO_SEAT || c === CLOSE_REMOVED) { forgetSeat(); setSeat(null); setView(null); }
@@ -35,6 +48,12 @@ function App() {
     // After joining, the server's seat message saved the token; pick it up.
     if (!seat && pendingJoin && view) setSeat(loadSeat());
   }, [seat, pendingJoin, view]);
+
+  const readScope = seat && view ? { game: seat.code, guest: view.you } : null;
+  const scopeKey = readScope ? `${readScope.game}:${readScope.guest}` : "";
+  useEffect(() => {
+    setLastRead(readScope ? loadRead(readScope.game, readScope.guest) : {});
+  }, [scopeKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function create() {
     const res = await fetch("/api/games", { method: "POST", body: JSON.stringify({ name }) });
@@ -58,7 +77,23 @@ function App() {
   }
   if (!view) return <main><p>Taking your seat…</p>{error && <p className="error">{error}</p>}</main>;
 
-  if (view.phase !== "foyer") return <Game view={view} offset={offset} act={(a) => link.current?.act(a)} error={error} />;
+  const talk: TalkLink = {
+    chats,
+    lastRead,
+    open: (chat) => {
+      const latest = chats[chat]?.messages.at(-1)?.seq ?? 0;
+      const next = { ...lastRead, [chat]: latest };
+      if (!readScope || (lastRead[chat] ?? 0) >= latest) return;
+      saveRead(readScope.game, readScope.guest, next);
+      setLastRead(next);
+    },
+    post: (chat, body) => link.current?.post(chat, body),
+    older: (chat) => { const first = chats[chat]?.messages[0]; if (first) link.current?.loadHistory(chat, first.seq); },
+    openRoom: (members) => link.current?.act({ type: "openRoom", members }),
+    leaveRoom: (room) => link.current?.act({ type: "leaveRoom", room }),
+  };
+  if (view.phase !== "foyer" && covered) return <main className="cover" onClick={() => setCovered(false)}><p>Notes</p><p>Tap to go back.</p></main>;
+  if (view.phase !== "foyer") return <Game view={view} offset={offset} act={(a) => link.current?.act(a)} error={error} talk={talk} cover={() => setCovered(true)} />;
   return (
     <main>
       <h1>The Foyer</h1>

@@ -1,4 +1,4 @@
-import type { ClientAction, ClientMessage, GuestView, ServerMessage } from "../shared/types";
+import type { ChatId, ChatMessage, ClientAction, ClientMessage, GuestView, ServerMessage } from "../shared/types";
 
 const STORAGE_KEY = "two-faced-seat";
 
@@ -19,6 +19,9 @@ export const forgetSeat = (): void => localStorage.removeItem(STORAGE_KEY);
 export interface Handlers {
   /** `offset` is server time minus this phone's time, measured when the view arrived. */
   onView(view: GuestView, offset: number): void;
+  onMessage(message: ChatMessage): void;
+  /** A page of one chat, oldest first. */
+  onHistory(chat: ChatId, messages: ChatMessage[], more: boolean): void;
   onError(reason: string): void;
   onClosed(code: number): void;
 }
@@ -41,12 +44,16 @@ export function connect(code: string, token: string | null, handlers: Handlers, 
       }
       handlers.onView(message.view, message.now - Date.now());
     } else if (message.type === "seat") saveSeat({ code, token: message.token });
+    else if (message.type === "message") handlers.onMessage(message.message);
+    else if (message.type === "history") handlers.onHistory(message.chat, message.messages, message.more);
     else handlers.onError(message.reason);
   };
   ws.onclose = (event) => handlers.onClosed(event.code);
   const send = (m: ClientMessage) => ws.send(JSON.stringify(m));
   return {
     act: (action: ClientAction) => send({ type: "action", id: crypto.randomUUID(), action }),
+    post: (chat: ChatId, body: string) => send({ type: "post", chat, body }),
+    loadHistory: (chat: ChatId, before: number) => send({ type: "loadHistory", chat, before }),
     close: () => ws.close(),
   };
 }

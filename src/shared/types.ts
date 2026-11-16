@@ -151,6 +151,12 @@ export interface Gift {
   favours: number;
 }
 
+/** A private chat some guests share; who is in it is public, what is said is not. */
+export interface Room {
+  id: string;
+  members: GuestId[];
+}
+
 export interface GameState {
   phase: "foyer" | "mingle" | "dance" | "sentDown" | "cellar" | "unmasking" | "lastDance";
   format: Format;
@@ -175,6 +181,8 @@ export interface GameState {
   gifts: Gift[];
   /** Each remaining guest's total as the current Mingle began: the standings shown during it. */
   mingleStandings: Record<GuestId, number>;
+  /** Every Room opened this game, in the order opened. */
+  rooms: Room[];
 }
 
 export type Action =
@@ -184,6 +192,8 @@ export type Action =
   | { type: "answer"; guest: GuestId; position: number }
   | { type: "buyPoints"; guest: GuestId; favours: number }
   | { type: "gift"; guest: GuestId; to: GuestId; favours: number }
+  | { type: "openRoom"; guest: GuestId; members: GuestId[] }
+  | { type: "leaveRoom"; guest: GuestId; room: string }
   | { type: "tick" };
 
 export type Rejection =
@@ -205,7 +215,12 @@ export type Rejection =
   | "not enough favours"
   | "gifts are given in the Mingle only"
   | "can't gift yourself"
-  | "bad amount";
+  | "bad amount"
+  | "the game hasn't started"
+  | "a Room needs another guest"
+  | "a Room can't hold everyone"
+  | "no such Room"
+  | "not in that Room";
 
 export type ApplyResult = { ok: true; state: GameState } | { ok: false; reason: Rejection };
 
@@ -245,6 +260,8 @@ interface Seated {
   you: GuestId;
   host: GuestId;
   guests: PublicGuest[];
+  /** Every Room and who is in it: the "who's talking" screen. */
+  rooms: Room[];
 }
 
 export type GuestView =
@@ -316,18 +333,39 @@ export type GuestView =
       favours: Record<GuestId, number>;
     });
 
-/** Chats a guest can read and post in; none exist yet. */
-export type ChatAccess = never[];
+/** A chat's id: "table", or a Room's id. */
+export type ChatId = string;
+
+/** The chats a guest can read; `canPost` is whether they can also post. */
+export type ChatAccess = { chat: ChatId; canPost: boolean }[];
+
+export const MESSAGE_PAGE = 30;
+export const MAX_MESSAGE_LENGTH = 500;
+
+/** A chat message as the server delivers it, to that chat's members only. */
+export interface ChatMessage {
+  seq: number;
+  chat: ChatId;
+  guest: GuestId;
+  body: string;
+  at: number;
+}
 
 /** Message envelope. */
 export type ServerMessage =
   | { type: "view"; view: GuestView; version: number; build: string; /** Server time when sent, for the client's clock offset. */ now: number }
   | { type: "seat"; guest: GuestId; token: string }
+  | { type: "message"; message: ChatMessage }
+  /** A page of one chat, oldest first; `more` says whether older messages remain. */
+  | { type: "history"; chat: ChatId; messages: ChatMessage[]; more: boolean }
   | { type: "error"; reason: string };
 
 export type ClientMessage =
   | { type: "join"; name: string }
-  | { type: "action"; id: string; action: ClientAction };
+  | { type: "action"; id: string; action: ClientAction }
+  | { type: "post"; chat: ChatId; body: string }
+  /** The page of `chat` just older than the message `before`. */
+  | { type: "loadHistory"; chat: ChatId; before: number };
 
 /** An action as a client sends it; the server fills in the acting guest. */
 export type ClientAction =
@@ -335,9 +373,11 @@ export type ClientAction =
   | { type: "start" }
   | { type: "answer"; position: number }
   | { type: "buyPoints"; favours: number }
-  | { type: "gift"; to: GuestId; favours: number };
+  | { type: "gift"; to: GuestId; favours: number }
+  | { type: "openRoom"; members: GuestId[] }
+  | { type: "leaveRoom"; room: string };
 
-const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "buyPoints", "gift"] satisfies ClientAction["type"][];
+const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "buyPoints", "gift", "openRoom", "leaveRoom"] satisfies ClientAction["type"][];
 
 /** True only for the actions a client may send; never `tick`, which only the alarm sends. */
 export function isClientAction(value: unknown): value is ClientAction {

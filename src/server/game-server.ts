@@ -1,14 +1,18 @@
 import { Server, type Connection, type ConnectionContext, type WSMessage } from "partyserver";
-import { apply, doorsOpen, newGame, nextDeadline, viewFor } from "../engine/game";
+import { apply, chatAccess, doorsOpen, newGame, nextDeadline, viewFor } from "../engine/game";
 import {
   CLOSE_NO_SEAT,
   CLOSE_REMOVED,
   CLOSE_TAKEN_OVER,
   type Action,
+  type ChatId,
+  type ChatMessage,
   type ClientMessage,
   type GameState,
   type GuestId,
   isClientAction,
+  MAX_MESSAGE_LENGTH,
+  MESSAGE_PAGE,
   type SeatGrant,
   type ServerMessage,
 } from "../shared/types";
@@ -82,7 +86,11 @@ export class Game extends Server<Cloudflare.Env> {
   // --- connections -----------------------------------------------------
 
   private send(connection: Connection, message: ServerMessage): void {
-    connection.send(JSON.stringify(message));
+    try {
+      connection.send(JSON.stringify(message));
+    } catch {
+      // The socket closed under us; nothing to tell it.
+    }
   }
 
   async onConnect(connection: Connection<ConnState>, ctx: ConnectionContext): Promise<void> {
@@ -113,6 +121,34 @@ export class Game extends Server<Cloudflare.Env> {
     this.takeOver(seat.guest, connection.id);
     connection.setState({ guest: seat.guest, viewHash: null });
     this.sendViews(loaded.state, loaded.version);
+    for (const { chat } of chatAccess(loaded.state, seat.guest)) this.sendPage(connection, chat, null);
+  }
+
+  // --- chat: outside the game state, delivered to a chat's members only ---
+
+  /** The page of `chat` just older than `before` (the latest page when null), oldest first. */
+  private sendPage(connection: Connection, chat: ChatId, before: number | null): void {
+    const rows = this.sql<ChatMessage>`SELECT seq, chat, guest, body, at FROM messages WHERE chat = ${chat} AND seq < ${before ?? Number.MAX_SAFE_INTEGER} ORDER BY seq DESC LIMIT ${MESSAGE_PAGE + 1}`;
+    this.send(connection, { type: "history", chat, messages: rows.slice(0, MESSAGE_PAGE).reverse(), more: rows.length > MESSAGE_PAGE });
+  }
+
+  private canRead(state: GameState, guest: GuestId | null | undefined, chat: ChatId): boolean {
+    return !!guest && chatAccess(state, guest).some((c) => c.chat === chat);
+  }
+
+  private post(connection: Connection<ConnState>, loaded: { state: GameState }, chat: unknown, body: unknown): void {
+    const guest = connection.state?.guest;
+    if (!guest) return this.send(connection, { type: "error", reason: "no seat" });
+    const access = typeof chat === "string" ? chatAccess(loaded.state, guest).find((c) => c.chat === chat) : undefined;
+    if (!access || typeof chat !== "string") return this.send(connection, { type: "error", reason: "no such chat" });
+    if (!access.canPost) return this.send(connection, { type: "error", reason: "this chat is read-only" });
+    const text = typeof body === "string" ? body.trim() : "";
+    if (text === "") return this.send(connection, { type: "error", reason: "empty message" });
+    if ([...text].length > MAX_MESSAGE_LENGTH) return this.send(connection, { type: "error", reason: "message too long" });
+    const at = Date.now();
+    const seq = this.sql<{ seq: number }>`INSERT INTO messages (chat, guest, body, at) VALUES (${chat}, ${guest}, ${text}, ${at}) RETURNING seq`[0]!.seq;
+    const message: ServerMessage = { type: "message", message: { seq, chat, guest, body: text, at } };
+    for (const c of this.getConnections<ConnState>()) if (this.canRead(loaded.state, c.state?.guest, chat)) this.send(c, message);
   }
 
   /** A second tab takes the seat and closes the old socket. */
@@ -149,6 +185,14 @@ export class Game extends Server<Cloudflare.Env> {
       this.send(connection, { type: "seat", guest: id, token: seat.token });
       this.commit(result.state, loaded.version + 1);
       return;
+    }
+
+    if (message.type === "post") return this.post(connection, loaded, message.chat, message.body);
+
+    if (message.type === "loadHistory") {
+      if (typeof message.chat !== "string" || !this.canRead(loaded.state, guest, message.chat)) return this.send(connection, { type: "error", reason: "no such chat" });
+      const before = Number(message.before);
+      return this.sendPage(connection, message.chat, Number.isFinite(before) ? before : null);
     }
 
     if (message.type === "action") {

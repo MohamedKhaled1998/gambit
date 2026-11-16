@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { MINGLE_MS, SENT_DOWN_MS, UNMASKING_MS, type ClientAction, type GuestView, type StepView, type PublicGuest, type RankingEntry } from "../shared/types";
 import { MaskIcon } from "./mask";
+import { Talk, type TalkLink } from "./talk";
 
 type Act = (action: ClientAction) => void;
 
@@ -128,9 +129,10 @@ function GiftScreen({ view, act }: { view: Extract<GuestView, { phase: "mingle" 
   );
 }
 
-export function Game({ view, offset, act, error }: { view: Exclude<GuestView, { phase: "foyer" }>; offset: number; act: Act; error: string | null }) {
+export function Game({ view, offset, act, error, talk, cover }: { view: Exclude<GuestView, { phase: "foyer" }>; offset: number; act: Act; error: string | null; talk: TalkLink; cover(): void }) {
   const now = useServerNow(offset);
   return (
+    <div className="salon">
     <main>
       {view.phase !== "lastDance" && <PhaseRail phase={view.phase} />}
       {view.phase === "mingle" && (
@@ -204,5 +206,7 @@ export function Game({ view, offset, act, error }: { view: Exclude<GuestView, { 
       )}
       {error && <p className="error">{error}</p>}
     </main>
+    <Talk view={view} link={talk} cover={cover} />
+    </div>
   );
 }

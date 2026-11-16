@@ -67,3 +67,21 @@ export class Client {
     return { client: this, guest: seat.guest, token: seat.token };
   }
 }
+
+export type Seated = { client: Client; guest: string; token: string };
+
+/** A started game of `n` guests, every one connected; the Host is first. */
+export async function startedGame(n: number): Promise<{ code: string; guests: Seated[] }> {
+  const grant = await createGameOverHttp("Ana");
+  const host = await Client.connect(grant.code, grant.token);
+  await host.until(() => host.views().length > 0);
+  const guests: Seated[] = [{ client: host, guest: grant.guest, token: grant.token }];
+  for (let i = 1; i < n; i++) guests.push(await (await Client.connect(grant.code)).join(grant.code, `Guest${i}`));
+  await host.until(() => host.lastView()?.guests.length === n);
+  host.send({ type: "action", id: "start", action: { type: "start" } });
+  await Promise.all(guests.map((g) => g.client.until(() => g.client.lastView()?.phase === "mingle")));
+  return { code: grant.code, guests };
+}
+
+export const chatMessages = (c: Client, chat?: string) =>
+  c.messages.flatMap((m) => (m.type === "message" ? [m.message] : m.type === "history" ? m.messages : [])).filter((m) => !chat || m.chat === chat);

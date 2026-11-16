@@ -49,6 +49,7 @@ export function newGame(seed: number): GameState {
     cellar: null,
     gifts: [],
     mingleStandings: {},
+    rooms: [],
   };
 }
 
@@ -100,6 +101,28 @@ export function apply(state: GameState, action: Action, now: number): ApplyResul
       next.guests.find((g) => g.id === action.guest)!.favours -= action.favours;
       next.guests.find((g) => g.id === action.to)!.favours += action.favours;
       next.gifts.push({ round: state.round, from: action.guest, to: action.to, favours: action.favours });
+      return { ok: true, state: next };
+    }
+    case "openRoom": {
+      if (state.phase === "foyer") return reject("the game hasn't started");
+      const host = remaining(state).find((g) => g.id === action.guest);
+      if (!host) return reject("no such guest");
+      const others = action.members;
+      if (!Array.isArray(others) || others.some((m) => !remaining(state).some((g) => g.id === m))) return reject("no such guest");
+      if (new Set(others).size !== others.length || others.includes(action.guest)) return reject("no such guest");
+      if (others.length === 0) return reject("a Room needs another guest");
+      if (others.length >= remaining(state).length - 1) return reject("a Room can't hold everyone");
+      const next = structuredClone(state);
+      next.rooms.push({ id: `r${state.rooms.length + 1}`, members: [action.guest, ...others] });
+      return { ok: true, state: next };
+    }
+    case "leaveRoom": {
+      const room = state.rooms.find((r) => r.id === action.room);
+      if (!room) return reject("no such Room");
+      if (!room.members.includes(action.guest)) return reject("not in that Room");
+      const next = structuredClone(state);
+      const r = next.rooms.find((x) => x.id === action.room)!;
+      r.members = r.members.filter((m) => m !== action.guest);
       return { ok: true, state: next };
     }
     case "join": {
@@ -282,7 +305,7 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
   const me = state.guests.find((g) => g.id === guest);
   if (!me || state.host === null) return null;
   const guests = state.guests.map(({ id, name, mask, unmaskedIn }) => ({ id, name, mask: { ...mask }, unmasked: unmaskedIn !== undefined }));
-  const seated = { you: guest, host: state.host, guests };
+  const seated = { you: guest, host: state.host, guests, rooms: state.rooms.map((r) => ({ id: r.id, members: [...r.members] })) };
   const def = state.danceDef;
   const announcement = def && { name: def.name, encore: state.danceEncore, rulesSummary: def.rulesSummary, workedExample: def.workedExample };
   const publicFavours = () => Object.fromEntries(remaining(state).map((g) => [g.id, g.favours]));
@@ -356,9 +379,10 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
   }
 }
 
-/** No chats exist before the Overture. */
-export function chatAccess(_state: GameState, _guest: GuestId): ChatAccess {
-  return [];
+/** The chats a guest can read and post in: the Table and their Rooms, once the game has started. */
+export function chatAccess(state: GameState, guest: GuestId): ChatAccess {
+  if (state.phase === "foyer" || !remaining(state).some((g) => g.id === guest)) return [];
+  return [{ chat: "table", canPost: true }, ...state.rooms.filter((r) => r.members.includes(guest)).map((r) => ({ chat: r.id, canPost: true }))];
 }
 
 /** When the next `tick` is due, or null when nothing is waiting on the clock. */
