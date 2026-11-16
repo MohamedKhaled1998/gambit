@@ -24,7 +24,7 @@ describe("library entry checks", () => {
 
       it("keeps every step to 45s or less and its Prelude to 90s or less", () => {
         expect(m.stepSeconds).toBeLessThanOrEqual(45);
-        expect(m.answerSeconds + 3).toBeLessThanOrEqual(m.stepSeconds);
+        expect(m.studySeconds + m.answerSeconds + 3).toBeLessThanOrEqual(m.stepSeconds);
         expect(m.preludeSeconds).toBeLessThanOrEqual(90);
       });
 

@@ -43,7 +43,7 @@ export function playMatch(s: GameState, play: Player): GameState {
         const right = race.layouts[id]![race.step]!.indexOf(0);
         const move = play(id, step, right);
         const live = phase === "dance" ? s.match! : s.cellar!.race!;
-        if (move && s.phase === phase && live.stage === "answer") s = must(s, { type: "answer", guest: id, position: move.position }, race.stepStartedAt + move.ms);
+        if (move && s.phase === phase && live.stage === "answer") s = must(s, { type: "answer", guest: id, position: move.position }, race.answerStartedAt + move.ms);
       }
     }
     s = tickToDeadline(s);

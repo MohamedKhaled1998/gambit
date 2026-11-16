@@ -1,5 +1,5 @@
 import { COLOURS, FEATHER_MAX, SHAPES, TRIMS, type Mask } from "../shared/types";
-import { draw } from "./random";
+import { draw, drawInt } from "./random";
 
 /** The shared mask generator: every mask in the game, a guest's or a problem's, is a trait combination from here. */
 
@@ -32,4 +32,15 @@ export function drawMask(seed: number, taken: readonly Mask[]): [Mask, number] {
   const free = allMasks().filter((m) => !used.has(`${m.colour}/${m.shape}`));
   const [r, next] = draw(seed);
   return [free[Math.floor(r * free.length)]!, next];
+}
+
+/** A random mask of any traits. Returns the advanced seed. */
+export function randomMask(seed: number, where: { colours?: readonly Mask["colour"][]; shapes?: readonly Mask["shape"][]; feathers?: readonly number[] } = {}): [Mask, number] {
+  const colours = where.colours ?? COLOURS, shapes = where.shapes ?? SHAPES, feathers = where.feathers ?? Array.from({ length: FEATHER_MAX + 1 }, (_, i) => i);
+  let c: number, sh: number, t: number, f: number;
+  [c, seed] = drawInt(seed, 0, colours.length - 1);
+  [sh, seed] = drawInt(seed, 0, shapes.length - 1);
+  [t, seed] = drawInt(seed, 0, TRIM_CHOICES.length - 1);
+  [f, seed] = drawInt(seed, 0, feathers.length - 1);
+  return [{ colour: colours[c]!, shape: shapes[sh]!, trim: TRIM_CHOICES[t]!, feathers: feathers[f]! }, seed];
 }

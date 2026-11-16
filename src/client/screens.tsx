@@ -56,25 +56,44 @@ function Ranking({ ranking, guests, you }: { ranking: RankingEntry[]; guests: Pu
   );
 }
 
+/** The study phase: a crowd all at once, a grid in the guest's own layout, a sequence one mask a second. */
+function StudyStage({ study, startedAt, now }: { study: NonNullable<StepView["study"]>; startedAt: number; now: number }) {
+  if (study.kind === "sequence") {
+    const i = Math.min(study.masks.length - 1, Math.max(0, Math.floor((now - startedAt) / 1000)));
+    return <p className="prompt-masks"><MaskIcon mask={study.masks[i]!} size={96} /></p>;
+  }
+  if (study.kind === "grid")
+    return (
+      <div className="tile-grid study" style={{ gridTemplateColumns: `repeat(${study.cols}, 1fr)` }}>
+        {study.masks.map((m, i) => <MaskIcon key={i} mask={m} size={48} />)}
+      </div>
+    );
+  return <p className="prompt-masks">{study.masks.map((m, i) => <MaskIcon key={i} mask={m} size={32} />)}</p>;
+}
+
 function StepPanel({ step, favours, buyRate, now, act }: { step: StepView; favours: number; buyRate: number; now: number; act: Act }) {
   const [spend, setSpend] = useState(1);
   return (
     <>
       <p>Step {step.index + 1} of {step.total} · you hold {favours} favours</p>
-      <Candle deadline={step.stage === "answer" ? step.answerDeadline : step.deadline} length={step.stage === "answer" ? step.answerDeadline - step.startedAt : 3000} now={now} />
-      {step.promptMasks ? (
+      <Candle deadline={step.stage === "reveal" ? step.deadline : step.stage === "study" ? step.deadline : step.answerDeadline} length={step.stage === "study" ? step.deadline - step.startedAt : step.stage === "answer" ? step.answerDeadline - step.answerStartedAt : 3000} now={now} />
+      <div className={step.lightsOut ? "stage lights-out" : "stage"}>
+      {step.study ? (
+        <StudyStage study={step.study} startedAt={step.startedAt} now={now} />
+      ) : step.promptMasks ? (
         <p className="prompt-masks">{step.promptMasks.map((m, i) => <MaskIcon key={i} mask={m} size={48} />)}<span className="prompt">?</span></p>
       ) : (
         <p className="prompt">{step.prompt}</p>
       )}
-      <div className={step.choiceMasks ? "choices with-masks" : "choices"}>
+      <div className={step.grid ? "choices tile-grid" : step.choiceMasks ? "choices with-masks" : "choices"} style={step.grid ? { gridTemplateColumns: `repeat(${step.grid.cols}, 1fr)` } : undefined}>
         {step.choices.map((c, i) => {
           const r = step.reveal;
           const cls = r ? (i === r.correct ? "right" : i === step.yourAnswer ? "wrong" : "") : i === step.yourAnswer ? "picked" : "";
           return (
-            <button key={i} className={cls} disabled={step.stage !== "answer" || step.yourAnswer !== null} onClick={() => act({ type: "answer", position: i })} aria-label={step.choiceMasks ? maskLabel(step.choiceMasks[i]!) : undefined}>{step.choiceMasks ? <MaskIcon mask={step.choiceMasks[i]!} size={64} /> : c}</button>
+            <button key={i} className={cls} disabled={step.stage !== "answer" || step.yourAnswer !== null} onClick={() => act({ type: "answer", position: i })} aria-label={step.choiceMasks ? maskLabel(step.choiceMasks[i]!) : step.grid ? c : undefined}>{step.choiceMasks ? <MaskIcon mask={step.choiceMasks[i]!} size={64} /> : step.grid ? "" : c}</button>
           );
         })}
+      </div>
       </div>
       {step.reveal && <p>{{ right: "✓ Right: ten points.", wrong: "✗ Not that one.", none: "No answer: no points." }[step.reveal.yourResult]}</p>}
       <p>

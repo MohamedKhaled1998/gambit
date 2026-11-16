@@ -86,6 +86,12 @@ export interface RaceMatchDef {
   masks?: boolean;
   generator:
     | { kind: "oddmask"; bands: { fromStep: number; decoys: boolean }[] }
+    /** A crowd growing from `crowd[0]` to `crowd[1]` masks; steps from `secondFrom` (0-1 of the way) ask for a second trait. */
+    | { kind: "glitters"; crowd: [number, number]; secondFrom: number }
+    /** A grid of side `sizes[i]`, each size taking an equal share of the steps. */
+    | { kind: "seating"; sizes: number[] }
+    /** Sequences growing from `length[0]` to `length[1]` masks. */
+    | { kind: "arrivals"; length: [number, number] }
     | { kind: "sums"; bands: { fromStep: number; kind: "addsub" | "mul" | "twoOps" }[] }
     | { kind: "sequences"; bands: { fromStep: number; rules: 1 | 2 }[] };
 }
@@ -99,6 +105,22 @@ export interface Problem {
   promptMasks?: Mask[];
   /** When the choices are masks: one per choice, in the same order. */
   choiceMasks?: Mask[];
+  /** Shown during the study phase only; the prompt and choices stay hidden until the answer phase. */
+  study?: Study;
+  /** Seconds this step's study lasts when it isn't the match's `studySeconds`. */
+  studySeconds?: number;
+}
+
+/**
+ * What the study phase shows. A crowd flashes all at once; a grid (cells in the problem's canonical
+ * order, which is the order of its choices) is laid out in each guest's own order; a sequence arrives
+ * one mask a second.
+ */
+export interface Study {
+  kind: "crowd" | "grid" | "sequence";
+  masks: Mask[];
+  /** Cells per row of a grid. */
+  cols?: number;
 }
 
 export interface RaceState {
@@ -107,8 +129,10 @@ export interface RaceState {
   /** layouts[guest][step][position] = index into the problem's canonical choices. */
   layouts: Record<GuestId, number[][]>;
   step: number;
-  stage: "answer" | "reveal";
+  stage: "study" | "answer" | "reveal";
   stepStartedAt: number;
+  /** When the answer phase opens: the step's start plus its study. */
+  answerStartedAt: number;
   answerDeadline: number;
   /** End of the current stage. */
   deadline: number;
@@ -230,6 +254,7 @@ export type Rejection =
   | "no Dance is running"
   | "not playing in this match"
   | "too late"
+  | "wait for the answer phase"
   | "already answered"
   | "no such choice"
   | "not enough favours"
@@ -255,11 +280,19 @@ export interface PublicGuest {
 export interface StepView {
   index: number;
   total: number;
-  stage: "answer" | "reveal";
+  stage: "study" | "answer" | "reveal";
   startedAt: number;
+  answerStartedAt: number;
   answerDeadline: number;
   deadline: number;
+  /** The prompt, empty while the study shows. */
   prompt: string;
+  /** During the study only: what to show, in this guest's own layout. */
+  study?: Study;
+  /** The lights are out: a memory match's answer phase. The stage dims. */
+  lightsOut: boolean;
+  /** Set when the choices are the cells of a tile grid (no masks shown) rather than a choice grid. */
+  grid?: { cols: number };
   /** In this guest's own order. */
   choices: string[];
   promptMasks?: Mask[];
