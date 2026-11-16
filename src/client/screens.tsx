@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MINGLE_MS, SENT_DOWN_MS, UNMASKING_MS, type ClientAction, type GuestView, type StepView, type AuctionView, type PledgeView, type PickView, type PublicGuest, type RankingEntry } from "../shared/types";
+import { MINGLE_MS, SENT_DOWN_MS, UNMASKING_MS, VOTE_BALLOT_MS, VOTE_REVEAL_MS, type ClientAction, type GuestView, type StepView, type AuctionView, type PledgeView, type PickView, type PublicGuest, type RankingEntry } from "../shared/types";
 import { ColourStrip, MaskIcon, maskLabel } from "./mask";
 import { Talk, type TalkLink } from "./talk";
 
@@ -281,7 +281,7 @@ export function Game({ view, offset, act, error, talk, cover }: { view: Exclude<
   return (
     <div className="salon">
     <main>
-      {view.phase !== "lastDance" && <PhaseRail phase={view.phase} />}
+      {view.phase !== "lastDance" && view.phase !== "vote" && <PhaseRail phase={view.phase} />}
       {view.phase === "mingle" && (
         <>
           <h1>The Mingle</h1>
@@ -301,6 +301,31 @@ export function Game({ view, offset, act, error, talk, cover }: { view: Exclude<
           {(!view.pledge || view.ranking.length > 0) && <h2>The running ranking</h2>}
           <Ranking ranking={view.ranking} guests={view.guests} you={view.you} />
         </>
+      )}
+      {view.phase === "vote" && (
+        <div className="dimmed">
+          <h1>The Unmasking <em>vote</em></h1>
+          <Candle deadline={view.deadline} length={view.stage === "ballot" ? VOTE_BALLOT_MS : VOTE_REVEAL_MS} now={now} />
+          {view.stage === "ballot" ? (
+            view.canVote ? (
+              <>
+                <p>Mercy unmasks {view.mercy} tonight; Greed unmasks {view.greed} and pays you 2 favours.</p>
+                {view.yourBallot ? <p>You voted. Ballots stay secret until the reveal.</p> : (
+                  <p>
+                    <button onClick={() => act({ type: "vote", choice: "mercy" })}>Mercy ({view.mercy})</button>{" "}
+                    <button onClick={() => act({ type: "vote", choice: "greed" })}>Greed ({view.greed})</button>
+                  </p>
+                )}
+              </>
+            ) : <p>The guests are voting; you are watching from the Balcony.</p>
+          ) : (
+            <>
+              <p>{view.reveal!.mercyWon ? "Mercy wins" : "Greed wins"}: {view.reveal!.count === 0 ? "nobody is unmasked this round." : `${view.reveal!.count} will be unmasked.`}</p>
+              <ul>{view.reveal!.ballots.map((b) => <li key={b.guest} className={b.guest === view.you ? "me" : ""}><Name guests={view.guests} id={b.guest} /> {b.choice}{b.cast ? "" : " (absent)"}</li>)}</ul>
+              <p>You hold <strong>{view.favours}</strong> favours.</p>
+            </>
+          )}
+        </div>
       )}
       {view.phase === "sentDown" && (
         <>

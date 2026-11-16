@@ -46,6 +46,11 @@ export const DANCE_MS = 5 * 60_000;
 export const SENT_DOWN_MS = 60_000;
 export const CELLAR_MS = 3 * 60_000;
 export const UNMASKING_MS = 60_000;
+/** An Unmasking vote: the secret ballot, then the reveal of every ballot. */
+export const VOTE_BALLOT_MS = 25_000;
+export const VOTE_REVEAL_MS = 10_000;
+/** Favours every Greed voter is paid at the reveal. */
+export const GREED_REWARD = 2;
 /** A quick game's rounds, before the Last Dance. */
 export const QUICK_ROUNDS = 3;
 
@@ -357,8 +362,32 @@ export interface Room {
   unmasked?: GuestId[];
 }
 
+export type VoteChoice = "mercy" | "greed";
+
+/** An Unmasking vote running. Ballots stay hidden until the reveal. */
+export interface VoteState {
+  /** Whether it came at the start of the round or paused the Dance between steps. */
+  during: "start" | "dance";
+  /** The lower count, and one more. */
+  mercy: number;
+  greed: number;
+  stage: "ballot" | "reveal";
+  deadline: number;
+  ballots: Record<GuestId, VoteChoice>;
+  /** Set at the reveal: every remaining guest's ballot (an absent guest's counts as Mercy), and the count chosen. */
+  result: { ballots: { guest: GuestId; choice: VoteChoice; cast: boolean }[]; mercyWon: boolean; count: number } | null;
+}
+
+/** A vote the round's seed has planned for its Dance: after which step's reveal, and its counts. */
+export interface VotePlan {
+  /** Null until the Dance starts and the boundary is drawn. */
+  afterStep: number | null;
+  mercy: number;
+  greed: number;
+}
+
 export interface GameState {
-  phase: "foyer" | "mingle" | "dance" | "sentDown" | "cellar" | "unmasking" | "lastDance";
+  phase: "foyer" | "mingle" | "dance" | "vote" | "sentDown" | "cellar" | "unmasking" | "lastDance";
   format: Format;
   /** Seed state for every random draw; advances as draws are made. */
   seed: number;
@@ -383,6 +412,14 @@ export interface GameState {
   pick: PickState | null;
   danceResult: DanceResult | null;
   cellar: CellarState | null;
+  /** The Unmasking vote running, at the start of a round or pausing its Dance. */
+  vote: VoteState | null;
+  /** The vote planned for this round's Dance, if any. */
+  votePlan: VotePlan | null;
+  /** Whether a vote has been held this game. */
+  voteHeld: boolean;
+  /** How many this round unmasks, once a vote has chosen it; null otherwise. */
+  voteCount: number | null;
   /** Every gift given this game. */
   gifts: Gift[];
   /** Each remaining guest's total as the current Mingle began: the standings shown during it. */
@@ -402,6 +439,7 @@ export type Action =
   | { type: "pledge"; guest: GuestId; amount: number }
   | { type: "pick"; guest: GuestId; number: number }
   | { type: "reckon"; guest: GuestId; choice: ReckoningChoice }
+  | { type: "vote"; guest: GuestId; choice: VoteChoice }
   | { type: "buyPoints"; guest: GuestId; favours: number }
   | { type: "gift"; guest: GuestId; to: GuestId; favours: number }
   | { type: "openRoom"; guest: GuestId; members: GuestId[] }
@@ -428,6 +466,8 @@ export type Rejection =
   | "no auction is running"
   | "no pledge is running"
   | "no pick is running"
+  | "no vote is running"
+  | "already voted"
   | "picks are whole numbers in the range"
   | "already pledged"
   | "already picked"
@@ -591,6 +631,26 @@ export type GuestView =
       ranking: RankingEntry[];
     })
   | (Seated & {
+      phase: "vote";
+      round: number;
+      during: "start" | "dance";
+      stage: "ballot" | "reveal";
+      /** The stage dims while a vote runs. */
+      dim: true;
+      deadline: number;
+      /** Your own live balance; a Greed voter's reward is in it from the reveal. */
+      favours: number;
+      /** Mercy's count and Greed's count: the round's unmasking count is known from here. */
+      mercy: number;
+      greed: number;
+      /** False for an unmasked guest, who watches. */
+      canVote: boolean;
+      /** Your own ballot, if cast; never anyone else's before the reveal. */
+      yourBallot: VoteChoice | null;
+      /** Only at the reveal: every ballot with names, and the count chosen. */
+      reveal: { ballots: { guest: GuestId; choice: VoteChoice; cast: boolean }[]; mercyWon: boolean; count: number } | null;
+    })
+  | (Seated & {
       phase: "sentDown";
       round: number;
       deadline: number;
@@ -679,12 +739,13 @@ export type ClientAction =
   | { type: "pledge"; amount: number }
   | { type: "pick"; number: number }
   | { type: "reckon"; choice: ReckoningChoice }
+  | { type: "vote"; choice: VoteChoice }
   | { type: "buyPoints"; favours: number }
   | { type: "gift"; to: GuestId; favours: number }
   | { type: "openRoom"; members: GuestId[] }
   | { type: "leaveRoom"; room: string };
 
-const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "bid", "pledge", "pick", "reckon", "buyPoints", "gift", "openRoom", "leaveRoom"] satisfies ClientAction["type"][];
+const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "bid", "pledge", "pick", "reckon", "vote", "buyPoints", "gift", "openRoom", "leaveRoom"] satisfies ClientAction["type"][];
 
 /** True only for the actions a client may send; never `tick`, which only the alarm sends. */
 export function isClientAction(value: unknown): value is ClientAction {

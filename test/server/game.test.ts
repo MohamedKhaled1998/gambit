@@ -44,7 +44,7 @@ describe("the Foyer over WebSockets", () => {
     for (const n of ["Bo", "Cy", "Di"]) await (await Client.connect(grant.code)).join(grant.code, n);
     await host.until(() => (host.lastView()?.guests.length ?? 0) === 4);
     host.send({ type: "action", id: "s1", action: { type: "start" } });
-    await host.until(() => host.lastView()?.phase === "mingle");
+    await host.until(() => host.lastView()?.phase === "mingle" || host.lastView()?.phase === "vote");
     const late = await Client.connect(grant.code);
     await late.until(() => late.errors().includes("doors are closed"));
     expect(late.lastView()).toBeUndefined();
@@ -178,15 +178,18 @@ describe("the clock", () => {
       if (!["Gilded Auction", "The Pledge", "Wallflower"].includes(name) || tries >= 40) return game;
     }
   }
+  /** A game that opens with an Unmasking vote is set aside for another: these tests are about the Mingle. */
   async function startedAnyGame() {
-    const grant = await createGameOverHttp("Ana");
-    const host = await Client.connect(grant.code, grant.token);
-    const others = [];
-    for (const n of ["Bo", "Cy", "Di"]) others.push(await (await Client.connect(grant.code)).join(grant.code, n));
-    await host.until(() => (host.lastView()?.guests.length ?? 0) === 4);
-    host.send({ type: "action", id: "s", action: { type: "start" } });
-    await host.until(() => host.lastView()?.phase === "mingle");
-    return { grant, host, others };
+    for (;;) {
+      const grant = await createGameOverHttp("Ana");
+      const host = await Client.connect(grant.code, grant.token);
+      const others = [];
+      for (const n of ["Bo", "Cy", "Di"]) others.push(await (await Client.connect(grant.code)).join(grant.code, n));
+      await host.until(() => (host.lastView()?.guests.length ?? 0) === 4);
+      host.send({ type: "action", id: "s", action: { type: "start" } });
+      await host.until(() => host.lastView()?.phase === "mingle" || host.lastView()?.phase === "vote");
+      if (host.lastView()?.phase === "mingle") return { grant, host, others };
+    }
   }
   const alarmOf = (code: string) =>
     runInDurableObject(env.Game.get(env.Game.idFromName(code)), async (_i, state) => state.storage.getAlarm());

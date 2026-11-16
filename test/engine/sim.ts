@@ -1,5 +1,5 @@
 import { apply, newGame, nextDeadline, viewFor } from "../../src/engine/game";
-import type { Action, GameState, GuestId, StepView } from "../../src/shared/types";
+import { MINGLE_MS, VOTE_BALLOT_MS, type Action, type GameState, type GuestId, type StepView } from "../../src/shared/types";
 
 export function must(state: GameState, action: Action, now = 0): GameState {
   const r = apply(state, action, now);
@@ -13,13 +13,37 @@ export function foyerWith(n: number, seed = 42): GameState {
   return s;
 }
 
-export const started = (n: number, seed = 42, at = 0): GameState => must(foyerWith(n, seed), { type: "start", guest: "g0" }, at);
+/** A game in round 1's Mingle, without an Unmasking vote at its start (see `withoutVote`); `startedRaw` keeps whatever the seed drew. */
+export const startedRaw = (n: number, seed = 42, at = 0): GameState => must(foyerWith(n, seed), { type: "start", guest: "g0" }, at);
+export const started = (n: number, seed = 42, at = 0): GameState => {
+  const s = startedRaw(n, seed, at);
+  return s.phase === "vote" ? withoutVote(s) : s;
+};
 
 /** Ticks to the next deadline, as the Durable Object's alarm does. */
-export function tickToDeadline(s: GameState): GameState {
+export function tickOnce(s: GameState): GameState {
   const d = nextDeadline(s);
   if (d === null) throw new Error("no deadline");
   return must(s, { type: "tick" }, d);
+}
+
+/**
+ * Takes back an Unmasking vote that just opened, as if the round had held none: the Mingle or the Dance goes on
+ * from where the vote found it. For the tests that aren't about the vote, whose round counts and favours it would change.
+ */
+export function withoutVote(s: GameState): GameState {
+  const v = s.vote!;
+  const next = { ...s, vote: null, votePlan: null, voteCount: null };
+  if (v.during === "dance") return { ...next, phase: "dance", deadline: (s.pledge ?? s.auction ?? s.pick ?? s.match!).deadline };
+  const opened = v.deadline - VOTE_BALLOT_MS;
+  const mingleStandings = Object.fromEntries(s.guests.filter((g) => g.unmaskedIn === undefined).map((g) => [g.id, g.favours]));
+  return { ...next, phase: "mingle", deadline: opened + MINGLE_MS, mingleStandings };
+}
+
+/** Ticks to the next deadline; an Unmasking vote that opens is taken back (see `withoutVote`). */
+export function tickToDeadline(s: GameState): GameState {
+  s = tickOnce(s);
+  return s.phase === "vote" ? withoutVote(s) : s;
 }
 
 /** Moves to the start of the Dance. */
