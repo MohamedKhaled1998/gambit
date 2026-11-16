@@ -1,4 +1,5 @@
-import { COLOURS, SHAPES, type Problem, type RaceMatchDef } from "../shared/types";
+import { COLOURS, FEATHER_MAX, SHAPES, type Mask, type Problem, type RaceMatchDef } from "../shared/types";
+import { maskName, TRIM_CHOICES } from "./masks";
 import { drawInt, shuffle } from "./random";
 
 /**
@@ -13,9 +14,11 @@ interface Made {
   prompt: string;
   /** The right answer first, then wrong ones; may hold duplicates. */
   choices: string[];
+  promptMasks?: Mask[];
+  choiceMasks?: Mask[];
 }
 
-const FEATHERS = 9;
+const FEATHERS = FEATHER_MAX + 1;
 
 /** `count` terms of a sequence of one rule, and the next term. */
 function numberRule(seed: number, count: number, small: boolean): [number[], number] {
@@ -65,9 +68,11 @@ interface MaskTerm {
   colour: number;
   shape: number;
   feathers: number;
+  trim: Mask["trim"];
 }
 const wrap = (v: number, n: number) => ((v % n) + n) % n;
-const name = (m: MaskTerm) => `${COLOURS[wrap(m.colour, COLOURS.length)]} ${SHAPES[wrap(m.shape, SHAPES.length)]} ${wrap(m.feathers, FEATHERS) + 1}`;
+const toMask = (m: MaskTerm): Mask => ({ colour: COLOURS[wrap(m.colour, COLOURS.length)]!, shape: SHAPES[wrap(m.shape, SHAPES.length)]!, trim: m.trim, feathers: wrap(m.feathers, FEATHERS) });
+const name = (m: MaskTerm) => maskName(toMask(m));
 const ATTRS = ["colour", "shape", "feathers"] as const;
 
 /** Mask `i` along a track that moves one attribute on by one per step. */
@@ -77,11 +82,12 @@ function track(base: MaskTerm, attr: (typeof ATTRS)[number], i: number): MaskTer
 
 function masks(seed: number, rules: 1 | 2): [Made, number] {
   const pick = (s: number): [MaskTerm, number] => {
-    let colour: number, shape: number, feathers: number;
+    let colour: number, shape: number, feathers: number, trim: number;
     [colour, s] = drawInt(s, 0, COLOURS.length - 1);
     [shape, s] = drawInt(s, 0, SHAPES.length - 1);
     [feathers, s] = drawInt(s, 0, FEATHERS - 1);
-    return [{ colour, shape, feathers }, s];
+    [trim, s] = drawInt(s, 0, TRIM_CHOICES.length - 1);
+    return [{ colour, shape, feathers, trim: TRIM_CHOICES[trim]! }, s];
   };
   let base: MaskTerm, other: MaskTerm, ai: number, bi: number;
   [base, seed] = pick(seed);
@@ -97,7 +103,8 @@ function masks(seed: number, rules: 1 | 2): [Made, number] {
   for (const attr of ATTRS) for (const delta of [1, -1, 2]) wrong.push({ ...answer, [attr]: answer[attr] + delta });
   let order: MaskTerm[];
   [order, seed] = shuffle(seed, wrong);
-  return [{ prompt: `${terms.slice(0, -1).map(name).join(", ")}, ?`, choices: [name(answer), ...order.map(name)] }, seed];
+  const choiceTerms = [answer, ...order];
+  return [{ prompt: `${terms.slice(0, -1).map(name).join(", ")}, ?`, choices: choiceTerms.map(name), promptMasks: terms.slice(0, -1).map(toMask), choiceMasks: choiceTerms.map(toMask) }, seed];
 }
 
 /** Seeded problems, one rule then two; no prompt repeats. Returns the advanced seed. */
@@ -112,8 +119,14 @@ export function generateSequences(seed: number, def: RaceMatchDef & { generator:
       [made, seed] = isMask ? masks(seed, band.rules) : numbers(seed, band.rules);
       if (!seen.has(made.prompt) || tries > 200) {
         seen.add(made.prompt);
-        const choices = [made.choices[0]!, ...[...new Set(made.choices.slice(1))].filter((c) => c !== made.choices[0]).slice(0, 3)];
-        problems.push({ prompt: made.prompt, choices });
+        // Keep the right answer and the first three distinct wrong ones, masks alongside their names.
+        const keep = made.choices.map((_, i) => i).filter((i) => i === 0 || (made.choices.indexOf(made.choices[i]!) === i && made.choices[i] !== made.choices[0])).slice(0, 4);
+        problems.push({
+          prompt: made.prompt,
+          choices: keep.map((i) => made.choices[i]!),
+          ...(made.promptMasks && { promptMasks: made.promptMasks }),
+          ...(made.choiceMasks && { choiceMasks: keep.map((i) => made.choiceMasks![i]!) }),
+        });
         break;
       }
     }

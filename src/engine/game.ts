@@ -1,6 +1,5 @@
 import { LIBRARY } from "../content/library";
 import {
-    COLOURS,
   DANCE_PAYOUTS,
   MINGLE_MS,
   QUICK_ROUNDS,
@@ -14,7 +13,6 @@ import {
   MAX_GUESTS,
   MAX_NAME_LENGTH,
   MIN_GUESTS,
-  SHAPES,
   type Action,
   type ApplyResult,
   type ChatAccess,
@@ -25,7 +23,7 @@ import {
   type Rejection,
 } from "../shared/types";
 import { drawMatch } from "./draw-match";
-import { draw } from "./random";
+import { drawMask } from "./masks";
 import { cellarSize, unmaskingsFor } from "./schedule";
 import { advanceRace, answerRace, buyPoints, rankRace, startRace, stepView } from "./race";
 
@@ -52,15 +50,6 @@ export function newGame(seed: number): GameState {
     rooms: [],
     cellarTalks: [],
   };
-}
-
-/** A mask no other guest in the Foyer wears. */
-function drawMask(seed: number, taken: Mask[]): [Mask, number] {
-  const free: Mask[] = [];
-  for (const colour of COLOURS)
-    for (const shape of SHAPES) if (!taken.some((m) => m.colour === colour && m.shape === shape)) free.push({ colour, shape });
-  const [r, next] = draw(seed);
-  return [free[Math.floor(r * free.length)]!, next];
 }
 
 const reject = (reason: Extract<ApplyResult, { ok: false }>["reason"]): ApplyResult => ({ ok: false, reason });
@@ -315,11 +304,11 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
   const guests = state.guests.map(({ id, name, mask, unmaskedIn }) => ({ id, name, mask: { ...mask }, unmasked: unmaskedIn !== undefined }));
   const seated = { you: guest, host: state.host, guests, rooms: state.rooms.map((r) => ({ id: r.id, members: [...r.members] })), chats: talkSheet(state, guest) };
   const def = state.danceDef;
-  const announcement = def && { name: def.name, encore: state.danceEncore, rulesSummary: def.rulesSummary, workedExample: def.workedExample };
+  const announcement = def && { name: def.name, encore: state.danceEncore, rulesSummary: def.rulesSummary, workedExample: def.workedExample, masks: !!def.masks };
   const publicFavours = () => Object.fromEntries(remaining(state).map((g) => [g.id, g.favours]));
   const cellarGame = () => {
     const d = state.cellar!.def;
-    return { name: d.name, encore: state.cellar!.encore, rulesSummary: d.rulesSummary, workedExample: d.workedExample };
+    return { name: d.name, encore: state.cellar!.encore, rulesSummary: d.rulesSummary, workedExample: d.workedExample, masks: !!d.masks };
   };
   switch (state.phase) {
     case "mingle":

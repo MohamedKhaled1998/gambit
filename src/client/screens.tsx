@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { MINGLE_MS, SENT_DOWN_MS, UNMASKING_MS, type ClientAction, type GuestView, type StepView, type PublicGuest, type RankingEntry } from "../shared/types";
-import { MaskIcon } from "./mask";
+import { ColourStrip, MaskIcon, maskLabel } from "./mask";
 import { Talk, type TalkLink } from "./talk";
 
 type Act = (action: ClientAction) => void;
@@ -62,13 +62,17 @@ function StepPanel({ step, favours, buyRate, now, act }: { step: StepView; favou
     <>
       <p>Step {step.index + 1} of {step.total} · you hold {favours} favours</p>
       <Candle deadline={step.stage === "answer" ? step.answerDeadline : step.deadline} length={step.stage === "answer" ? step.answerDeadline - step.startedAt : 3000} now={now} />
-      <p className="prompt">{step.prompt}</p>
-      <div className="choices">
+      {step.promptMasks ? (
+        <p className="prompt-masks">{step.promptMasks.map((m, i) => <MaskIcon key={i} mask={m} size={48} />)}<span className="prompt">?</span></p>
+      ) : (
+        <p className="prompt">{step.prompt}</p>
+      )}
+      <div className={step.choiceMasks ? "choices with-masks" : "choices"}>
         {step.choices.map((c, i) => {
           const r = step.reveal;
           const cls = r ? (i === r.correct ? "right" : i === step.yourAnswer ? "wrong" : "") : i === step.yourAnswer ? "picked" : "";
           return (
-            <button key={i} className={cls} disabled={step.stage !== "answer" || step.yourAnswer !== null} onClick={() => act({ type: "answer", position: i })}>{c}</button>
+            <button key={i} className={cls} disabled={step.stage !== "answer" || step.yourAnswer !== null} onClick={() => act({ type: "answer", position: i })} aria-label={step.choiceMasks ? maskLabel(step.choiceMasks[i]!) : undefined}>{step.choiceMasks ? <MaskIcon mask={step.choiceMasks[i]!} size={64} /> : c}</button>
           );
         })}
       </div>
@@ -144,6 +148,7 @@ export function Game({ view, offset, act, error, talk, cover }: { view: Exclude<
           <h2>Tonight's Dance: {view.announcement.name}</h2>
           <p>{view.announcement.rulesSummary}</p>
           <p><em>{view.announcement.workedExample}</em></p>
+          {view.announcement.masks && <ColourStrip />}
         </>
       )}
       {view.phase === "dance" && (
@@ -177,6 +182,7 @@ export function Game({ view, offset, act, error, talk, cover }: { view: Exclude<
           <p>{view.unmaskings === 0 ? "A warm-up round: nobody is unmasked tonight." : `The Cellar game unmasks ${view.unmaskings}.`}</p>
           <h2>The Cellar game: {view.cellarGame.name}{view.cellarGame.encore ? " (an Encore)" : ""}</h2>
           <p>{view.cellarGame.rulesSummary}</p>
+          {view.cellarGame.masks && <ColourStrip />}
         </>
       )}
       {view.phase === "cellar" && (

@@ -1,5 +1,12 @@
 import fc from "fast-check";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// These tests are about The Tally and The Procession, so the game draws from those two.
+vi.mock("../../src/content/library", async () => {
+  const { THE_TALLY } = await import("../../src/content/the-tally");
+  const { THE_PROCESSION } = await import("../../src/content/the-procession");
+  return { LIBRARY: [THE_TALLY, THE_PROCESSION] };
+});
 import { apply, nextDeadline, viewFor } from "../../src/engine/game";
 import { CELLAR_MS, SENT_DOWN_MS, UNMASKING_MS, type GameState, type GuestView } from "../../src/shared/types";
 import { mixedPlayer, must, playDance, playGame, playMatch, started, tickToDeadline } from "./sim";

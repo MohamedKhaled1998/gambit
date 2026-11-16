@@ -116,6 +116,8 @@ export function stepView(race: RaceState, guest: GuestId): StepView {
     deadline: race.deadline,
     prompt: problem.prompt,
     choices: layout.map((i) => problem.choices[i]!),
+    ...(problem.promptMasks && { promptMasks: problem.promptMasks }),
+    ...(problem.choiceMasks && { choiceMasks: layout.map((i) => problem.choiceMasks![i]!) }),
     yourAnswer: race.answers[guest]?.position ?? null,
     reveal: revealed ? { correct: layout.indexOf(0), yourResult: race.results[guest] ?? "none" } : null,
   };

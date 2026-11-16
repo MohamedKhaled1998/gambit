@@ -68,7 +68,7 @@ describe("library entry checks", () => {
       it("has a problem bank that covers the longest game", () => {
         const longest = Math.max(m.steps.dance ?? 0, m.steps.cellar ?? 0);
         const [problems] = generateProblems(1, m, longest);
-        expect(new Set(problems.map((p) => p.prompt)).size).toBe(longest);
+        expect(new Set(problems.map((p) => `${p.prompt}|${[...p.choices].sort().join("|")}`)).size).toBe(longest);
       });
 
       if (m.guestRange.dance) it("plays to a strict, paid ranking with simulated guests across its Dance range", () => {

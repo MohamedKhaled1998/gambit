@@ -1,16 +1,79 @@
-import type { Mask } from "../shared/types";
+import { COLOURS, type Colour, type Mask } from "../shared/types";
 
-const PALETTE: Record<Mask["colour"], string> = {
+export const PALETTE: Record<Colour, string> = {
   gold: "#d6a823", silver: "#c3c9d6", red: "#c8352c", sapphire: "#2f60cc", emerald: "#1d9a6b", onyx: "#45454f",
 };
-const SHAPE_LABEL: Record<Mask["shape"], string> = { fox: "F", cat: "C", owl: "O", plain: "" };
+const INK = "#12121a";
+const CREAM = "#f3e9d2";
 
-/** Placeholder mask: a coloured disc with the shape's initial. Ticket 07 brings the real generator. */
-export function MaskIcon({ mask, size = 40 }: { mask: Mask; size?: number }) {
+export const maskLabel = (m: Mask) =>
+  `${m.colour} ${m.shape} mask${m.trim ? ` with ${m.trim}` : ""}, ${m.feathers === 0 ? "no feathers" : `${m.feathers} feather${m.feathers === 1 ? "" : "s"}`}`;
+
+/** Feather `i` of `n`, fanned above the mask in the palette-neutral cream-edged style so it stays countable at 48px. */
+function Feathers({ n, fill }: { n: number; fill: string }) {
+  const xs = [[30], [22, 38], [16, 30, 44]][n - 1] ?? [];
+  const tilt = [[0], [-12, 12], [-20, 0, 20]][n - 1] ?? [];
   return (
-    <svg width={size} height={size} viewBox="0 0 40 40" role="img" aria-label={`${mask.colour} ${mask.shape} mask`}>
-      <circle cx="20" cy="20" r="18" fill={PALETTE[mask.colour]} stroke="#12121a" strokeWidth="2" />
-      <text x="20" y="26" textAnchor="middle" fontSize="18" fill="#12121a">{SHAPE_LABEL[mask.shape]}</text>
+    <>
+      {xs.map((x, i) => (
+        <ellipse key={i} cx={x} cy={9} rx={3.6} ry={9} transform={`rotate(${tilt[i]} ${x} 16)`} fill={fill} stroke={INK} strokeWidth="1.6" />
+      ))}
+    </>
+  );
+}
+
+function Face({ shape, fill }: { shape: Mask["shape"]; fill: string }) {
+  const s = { fill, stroke: INK, strokeWidth: 2, strokeLinejoin: "round" as const };
+  return (
+    <>
+      {shape === "fox" && <path d="M10 30 L8 12 L22 22 L38 22 L52 12 L50 30 Z" {...s} />}
+      {shape === "cat" && <path d="M10 30 L12 12 L24 22 L36 22 L48 12 L50 30 Z" {...s} />}
+      {shape === "owl" && (
+        <>
+          <circle cx="16" cy="22" r="7" {...s} />
+          <circle cx="44" cy="22" r="7" {...s} />
+        </>
+      )}
+      <path d="M8 28 Q30 20 52 28 Q52 48 40 50 Q34 46 30 46 Q26 46 20 50 Q8 48 8 28 Z" {...s} />
+      {shape === "owl" && <path d="M22 28 Q30 24 38 28" fill="none" stroke={INK} strokeWidth="1.6" />}
+      <ellipse cx="21" cy="35" rx="4.5" ry="3.2" fill={INK} />
+      <ellipse cx="39" cy="35" rx="4.5" ry="3.2" fill={INK} />
+    </>
+  );
+}
+
+function Trim({ trim }: { trim: NonNullable<Mask["trim"]> }) {
+  if (trim === "pearls")
+    return <>{[14, 22, 30, 38, 46].map((x, i) => <circle key={x} cx={x} cy={i % 4 === 0 ? 46 : 49} r={2.2} fill={CREAM} stroke={INK} strokeWidth="0.8" />)}</>;
+  if (trim === "lace")
+    return <path d="M10 46 q3 6 6 0 q3 6 6 0 q3 6 6 0 q3 6 6 0 q3 6 6 0 q3 6 6 0 q3 6 6 0 q3 6 6 0" fill="none" stroke={CREAM} strokeWidth="2.4" />;
+  return (
+    <>
+      <path d="M26 50 L18 58 L24 58 L30 52 L36 58 L42 58 L34 50 Z" fill={CREAM} stroke={INK} strokeWidth="1" />
+      <circle cx="30" cy="50" r="2.4" fill={CREAM} stroke={INK} strokeWidth="1" />
+    </>
+  );
+}
+
+/** A mask drawn from its traits, at avatar (20px) up to play (48px+) sizes. */
+export function MaskIcon({ mask, size = 40 }: { mask: Mask; size?: number }) {
+  const fill = PALETTE[mask.colour];
+  return (
+    <svg width={size} height={size} viewBox="0 0 60 60" role="img" aria-label={maskLabel(mask)} style={{ verticalAlign: "middle" }}>
+      <Feathers n={mask.feathers} fill={fill} />
+      <Face shape={mask.shape} fill={fill} />
+      {mask.trim && <Trim trim={mask.trim} />}
     </svg>
+  );
+}
+
+/** The six colours with their names, for a Rules card of a match with masks. */
+export function ColourStrip() {
+  return (
+    <ul className="colour-strip" aria-label="The six colours">
+      {COLOURS.map((c) => (
+        <li key={c}><span className="swatch" style={{ background: PALETTE[c] }} /> {c}</li>
+      ))}
+    </ul>
   );
 }

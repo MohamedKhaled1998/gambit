@@ -18,6 +18,7 @@ export const THE_PROCESSION: RaceMatchDef = {
   pointsPerCorrect: 10,
   buyRate: 5,
   tieBreak: ["points", "time", "draw"],
+  masks: true,
   // One rule, then two rules interleaved.
   generator: { kind: "sequences", bands: [{ fromStep: 0, rules: 1 }, { fromStep: 4, rules: 2 }] },
 };

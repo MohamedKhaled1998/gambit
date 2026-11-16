@@ -5,10 +5,19 @@ export type Colour = (typeof COLOURS)[number];
 export const SHAPES = ["fox", "cat", "owl", "plain"] as const;
 export type Shape = (typeof SHAPES)[number];
 
-/** Placeholder mask: a colour from the six-colour palette and a shape. */
+export const TRIMS = ["pearls", "lace", "ribbons"] as const;
+export type Trim = (typeof TRIMS)[number];
+/** Feathers run 0 to this many, so they stay countable at about 48px. */
+export const FEATHER_MAX = 3;
+
+/** A mask is data: its traits. The client draws it; problem banks only pick traits. */
 export interface Mask {
   colour: Colour;
   shape: Shape;
+  /** In cream; null for none. */
+  trim: Trim | null;
+  /** 0 to FEATHER_MAX. */
+  feathers: number;
 }
 
 export type GuestId = string;
@@ -73,7 +82,10 @@ export interface RaceMatchDef {
   tieBreak: ("points" | "time" | "draw")[];
   /** Drawn at most once a game. */
   oncePerGame?: boolean;
+  /** The match shows masks, so its Rules card carries the strip of the six colours. */
+  masks?: boolean;
   generator:
+    | { kind: "oddmask"; bands: { fromStep: number; decoys: boolean }[] }
     | { kind: "sums"; bands: { fromStep: number; kind: "addsub" | "mul" | "twoOps" }[] }
     | { kind: "sequences"; bands: { fromStep: number; rules: 1 | 2 }[] };
 }
@@ -83,6 +95,10 @@ export interface Problem {
   prompt: string;
   /** Canonical order; index 0 is the right answer. Never sent as is. */
   choices: string[];
+  /** Masks named in the question, shown as pictures beside the words. */
+  promptMasks?: Mask[];
+  /** When the choices are masks: one per choice, in the same order. */
+  choiceMasks?: Mask[];
 }
 
 export interface RaceState {
@@ -246,6 +262,9 @@ export interface StepView {
   prompt: string;
   /** In this guest's own order. */
   choices: string[];
+  promptMasks?: Mask[];
+  /** The masks to draw for the choices, in this guest's own order. */
+  choiceMasks?: Mask[];
   /** The position this guest chose, if any; never anyone else's. */
   yourAnswer: number | null;
   /** Only once the step is revealed. */
@@ -258,6 +277,8 @@ export interface Announcement {
   encore: boolean;
   rulesSummary: string;
   workedExample: string;
+  /** Show the strip of the six colours with their names. */
+  masks: boolean;
 }
 
 interface Seated {
