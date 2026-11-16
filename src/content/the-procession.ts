@@ -15,6 +15,13 @@ export const THE_PROCESSION: RaceMatchDef = {
   answerSeconds: 20,
   stepSeconds: 23,
   preludeSeconds: 45,
+  prelude: [
+    { seconds: 9, caption: "Ana, Ben and Cy watch the guests walk in a pattern: 3, 5, 9, 17, and then a gap.", screen: { kind: "step", stage: "answer", prompt: "3, 5, 9, 17, ?", choices: ["25", "31", "33", "34"] } },
+    { seconds: 9, caption: "Who comes next? Each gap doubles: plus 2, plus 4, plus 8.", screen: { kind: "step", stage: "answer", prompt: "3, 5, 9, 17, ?", choices: ["25", "31", "33", "34"] } },
+    { seconds: 9, caption: "Ben taps 33. Cy taps 31.", screen: { kind: "step", stage: "answer", prompt: "3, 5, 9, 17, ?", choices: ["25", "31", "33", "34"], taps: { ben: 2, cy: 1 } } },
+    { seconds: 9, caption: "The next gap is 16, so 33 is right. Ben scores ten points; Cy and Ana score nothing.", screen: { kind: "step", stage: "reveal", prompt: "3, 5, 9, 17, ?", choices: ["25", "31", "33", "34"], taps: { ben: 2, cy: 1 }, correct: 2 } },
+    { seconds: 9, caption: "Later patterns weave two rules together. Favours buy extra points, five each.", screen: { kind: "step", stage: "reveal", prompt: "3, 5, 9, 17, ?", choices: ["25", "31", "33", "34"], taps: { ben: 2, cy: 1 }, correct: 2 } },
+  ],
   pointsPerCorrect: 10,
   buyRate: 5,
   tieBreak: ["points", "time", "draw"],

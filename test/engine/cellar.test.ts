@@ -54,9 +54,9 @@ describe("being sent down", () => {
     }
   });
 
-  it("gives the sent-down screen a minute", () => {
+  it("gives the sent-down screen a minute, or until its Cellar game's Prelude is over if that runs longer", () => {
     const s = sentDown(5);
-    expect(nextDeadline(s)! - s.match!.deadline).toBe(SENT_DOWN_MS);
+    expect(nextDeadline(s)! - s.match!.deadline).toBe(Math.max(SENT_DOWN_MS, (s.prelude?.endsAt ?? 0) - s.match!.deadline));
   });
 });
 

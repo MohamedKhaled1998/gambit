@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { apply, chatAccess, nextDeadline, viewFor } from "../../src/engine/game";
 import { isDeleted } from "../../src/engine/last-dance";
 import { DELETE_AFTER_MS, type GameState, type GuestId, type GuestView } from "../../src/shared/types";
-import { mixedPlayer, must, playGame, playMatch, started, tickToDeadline } from "./sim";
+import { intoMatch, mixedPlayer, must, playGame, playMatch, started, tickToDeadline } from "./sim";
 
 const remaining = (s: GameState) => s.guests.filter((g) => g.unmaskedIn === undefined).map((g) => g.id);
 const guest = (s: GameState, id: GuestId) => s.guests.find((g) => g.id === id)!;
@@ -67,7 +67,7 @@ describe("leaving in the Mingle", () => {
     for (let seed = 0; seed < 40; seed++) {
       let s = started(5, seed);
       s = leave(s, "g4");
-      s = tickToDeadline(s);
+      s = intoMatch(tickToDeadline(s));
       expect(s.phase).toBe("dance");
       expect(Object.keys((s.match ?? s.auction ?? s.bluff)!.points).sort()).toEqual(remaining(s).sort());
     }
@@ -76,7 +76,7 @@ describe("leaving in the Mingle", () => {
 
 describe("leaving in the Dance", () => {
   it("ranks the leaver last, pays them the bottom payout and unmasks them before guests are sent down", () => {
-    let s = tickTo(started(6, 5), "dance");
+    let s = intoMatch(tickTo(started(6, 5), "dance"));
     s = leave(s, "g0");
     expect(guest(s, "g0").unmaskedIn).toBeUndefined();
     expect(guest(s, "g0").left).toBe(true);

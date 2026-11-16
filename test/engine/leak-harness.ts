@@ -192,6 +192,8 @@ export function arbState(): fc.Arbitrary<GameState> {
         }
         if (stage === "dance" || stage === "cellar") {
           s = (apply(s, { type: "tick" }, s.deadline!) as { state: GameState }).state;
+          // Past the Narrator's line and the Prelude, into the match.
+          while (s.phase === "dance" && !(s.match ?? s.auction ?? s.bluff)) s = (apply(s, { type: "tick" }, s.deadline!) as { state: GameState }).state;
           // Some guests answer, and the clock runs on a few steps.
           for (let k = 0; k < steps; k++) {
             const m = (s.match ?? s.auction ?? s.bluff)!;

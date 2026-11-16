@@ -3,6 +3,8 @@ import {
   DANCE_PAYOUTS,
   DELETE_AFTER_MS,
   MINGLE_MS,
+  OVERTURE_MS,
+  SENT_DOWN_LINES_MS,
   QUICK_ROUNDS,
   SENT_DOWN_MS,
   UNMASKING_MS,
@@ -27,7 +29,8 @@ import {
 } from "../shared/types";
 import { advanceAlong, alongDeadline, alongView, startAlong } from "./along";
 import { drawMatch } from "./draw-match";
-import { advanceLastDance, castVote, floorOf, lastDanceView, openLastDance } from "./last-dance";
+import { advanceLastDance, castVote, floorOf, lastDanceView, lastDancePlayers, openLastDance, startLastDanceMatch } from "./last-dance";
+import { everyoneSkipped, narrate, narratorView, openPrelude, preludeMs, preludeView, skip } from "./prelude";
 import { predict, predictionsReveal, predictionsView } from "./predictions";
 import { drawMask } from "./masks";
 import { cellarSize, unmaskingsFor } from "./schedule";
@@ -64,6 +67,10 @@ export function newGame(seed: number): GameState {
     lastDance: null,
     planned: 0,
     absent: [],
+    told: [],
+    narration: null,
+    prelude: null,
+    overtureUntil: null,
   };
 }
 
@@ -86,7 +93,22 @@ export function apply(state: GameState, action: Action, now: number): ApplyResul
       if (state.phase === "foyer") return reject("the game hasn't started");
       if (action.guest !== state.host) return reject("only the Host can do that");
       if (state.lastDance?.stage === "ended" || state.lastDance?.stage === "deleted") return reject("the game has ended");
-      return { ok: true, state: { ...structuredClone(state), phase: "ended", along: null, deadline: now + DELETE_AFTER_MS } };
+      return { ok: true, state: { ...structuredClone(state), phase: "ended", along: null, prelude: null, narration: null, deadline: now + DELETE_AFTER_MS } };
+    }
+    case "skipPrelude": {
+      if (!state.guests.some((g) => g.id === action.guest)) return reject("no such guest");
+      const next = structuredClone(state);
+      const why = skip(next, action.guest, now);
+      if (why) return reject(why);
+      // The match starts early once everyone in it has skipped.
+      const kind = next.prelude!.kind;
+      if (everyoneSkipped(next, kind === "dance" ? remaining(next).map((g) => g.id) : kind === "cellar" ? next.cellar!.guests : lastDancePlayers(next))) {
+        next.narration = null;
+        if (kind === "dance") startDance(next, now);
+        else if (kind === "cellar") startCellarGame(next, now);
+        else startLastDanceMatch(next, now);
+      }
+      return { ok: true, state: next };
     }
     case "rejoinLink": {
       if (!state.guests.some((g) => g.id === action.guest)) return reject("no such guest");
@@ -224,7 +246,7 @@ export function apply(state: GameState, action: Action, now: number): ApplyResul
       if (!fitsFormat(state)) return reject("need 4-10 guests to start");
       const dance = drawDance({ ...state, round: 1 });
       if (!dance) return reject("need 4-10 guests to start");
-      return { ok: true, state: openMingle({ ...dance, round: 1 }, now) };
+      return { ok: true, state: openMingle({ ...dance, round: 1 }, now, true) };
     }
   }
 }
@@ -305,45 +327,22 @@ function tick(state: GameState, now: number, present?: GuestId[]): GameState {
       advanceAlong(s.along!, at);
       continue;
     }
+    s.narration = null;
     if (s.phase === "mingle") {
-      const def = s.danceDef as MatchDef;
-      const guests = remaining(s).map((g) => g.id);
-      const before = s.seed;
-      if (def.type === "bluff") {
-        const [bluff, seed] = startBluff(s.seed, def, guests, at);
-        s.seed = seed;
-        s.bluff = bluff;
-        s.deadline = bluff.deadline;
-      } else if (def.type === "sealedBid") {
-        const [auction, seed] = startAuction(s.seed, def, guests, at);
-        s.seed = seed;
-        s.auction = auction;
-        s.deadline = auction.deadline;
-      } else {
-        const [race, seed] = startRace(s.seed, def, guests, at, def.steps.dance!);
-        s.seed = seed;
-        s.match = race;
-        s.deadline = race.deadline;
-      }
-      s.along = startAlong(def, "dance", unmaskedGuests(s), before, at);
       s.phase = "dance";
+      openDance(s, at);
     } else if (s.phase === "dance") {
-      const running = s.bluff ?? s.auction ?? s.match!;
+      const running = s.bluff ?? s.auction ?? s.match;
+      if (!running) {
+        // The Prelude is over: the match starts.
+        startDance(s, at);
+        continue;
+      }
       const more = s.bluff ? advanceBluff(s.bluff, at) : s.auction ? advanceAuction(s.auction, at) : advanceRace(s.match!, at);
       if (more) s.deadline = running.deadline;
       else s = sendDown(s, at);
     } else if (s.phase === "sentDown") {
-      const c = s.cellar!;
-      if (c.def.type !== "race") throw new Error(`${c.def.name} can't be a Cellar game`);
-      const before = s.seed;
-      const [race, seed] = startRace(s.seed, c.def, c.guests, at, c.def.steps.cellar!);
-      s.seed = seed;
-      s.along = startAlong(c.def, "cellar", unmaskedGuests(s), before, at);
-      c.race = race;
-      s.cellarTalks.push({ id: `cellar-${s.round}`, members: [...c.guests] });
-      s.match = null;
-      s.phase = "cellar";
-      s.deadline = race.deadline;
+      startCellarGame(s, at);
     } else if (s.phase === "cellar") {
       const race = s.cellar!.race!;
       if (advanceRace(race, at)) s.deadline = race.deadline;
@@ -354,6 +353,57 @@ function tick(state: GameState, now: number, present?: GuestId[]): GameState {
     else s.deadline = null;
   }
   return s;
+}
+
+/** The Dance slot opens: the Narrator's line, then the Prelude (not for an Encore), then the match. */
+function openDance(s: GameState, at: number): void {
+  const def = s.danceDef!;
+  const line = narrate(s, "dance", at);
+  s.prelude = openPrelude("dance", def, s.danceEncore, at + line);
+  const start = s.prelude?.endsAt ?? at + line;
+  if (start === at) startDance(s, at);
+  else s.deadline = start;
+}
+
+/** The Dance's match starts at `at`, from the Prelude's end or the last guest's skip. */
+function startDance(s: GameState, at: number): void {
+  const def = s.danceDef as MatchDef;
+  const guests = remaining(s).map((g) => g.id);
+  const before = s.seed;
+  if (def.type === "bluff") {
+    const [bluff, seed] = startBluff(s.seed, def, guests, at);
+    s.seed = seed;
+    s.bluff = bluff;
+    s.deadline = bluff.deadline;
+  } else if (def.type === "sealedBid") {
+    const [auction, seed] = startAuction(s.seed, def, guests, at);
+    s.seed = seed;
+    s.auction = auction;
+    s.deadline = auction.deadline;
+  } else {
+    const [race, seed] = startRace(s.seed, def, guests, at, def.steps.dance!);
+    s.seed = seed;
+    s.match = race;
+    s.deadline = race.deadline;
+  }
+  s.along = startAlong(def, "dance", unmaskedGuests(s), before, at);
+  s.prelude = null;
+}
+
+/** The Cellar game starts at `at`, from the end of the sent-down reveal or the last skip. */
+function startCellarGame(s: GameState, at: number): void {
+  const c = s.cellar!;
+  if (c.def.type !== "race") throw new Error(`${c.def.name} can't be a Cellar game`);
+  const before = s.seed;
+  const [race, seed] = startRace(s.seed, c.def, c.guests, at, c.def.steps.cellar!);
+  s.seed = seed;
+  s.along = startAlong(c.def, "cellar", unmaskedGuests(s), before, at);
+  c.race = race;
+  s.cellarTalks.push({ id: `cellar-${s.round}`, members: [...c.guests] });
+  s.match = null;
+  s.prelude = null;
+  s.phase = "cellar";
+  s.deadline = race.deadline;
 }
 
 /** The guests already unmasked: they play along with a match that starts now. */
@@ -419,7 +469,11 @@ function sendDown(s: GameState, at: number): GameState {
   // Unmasked guests may pick who the Cellar game unmasks, from now until it starts.
   if (unmaskings > 0) s.predictions.push({ round: s.round, cellar: [...down], unmaskings, picks: {}, unmasked: null });
   s.phase = "sentDown";
-  s.deadline = at + SENT_DOWN_MS;
+  // The Narrator's sent-down and Cellar line plays on the phones of the guests sent down, in the first half;
+  // the Cellar game's Prelude plays in the second, and a longer script runs the reveal on.
+  narrate(s, "sentDown", at, [...down]);
+  s.prelude = openPrelude("cellar", s.cellar.def, s.cellar.encore, at + SENT_DOWN_LINES_MS);
+  s.deadline = s.prelude ? Math.max(at + SENT_DOWN_MS, s.prelude.endsAt) : at + SENT_DOWN_MS;
   return s;
 }
 
@@ -440,6 +494,8 @@ function unmask(s: GameState, at: number): void {
   if (s.along) s.along.done = true;
   s.phase = "unmasking";
   s.deadline = at + UNMASKING_MS;
+  // The first unmasking is explained to the guests it unmasks, on their own phones.
+  if (c.unmasked.length > 0) narrate(s, "unmasking", at, [...c.unmasked]);
 }
 
 /** After the unmasking: round N+1's Mingle, or the Last Dance once the rounds are done. */
@@ -451,11 +507,15 @@ function nextRound(s: GameState, at: number): GameState {
 }
 
 /** Opens the round's Mingle; its standings are the totals as they stand now. */
-function openMingle(s: GameState, at: number): GameState {
+function openMingle(s: GameState, at: number, overture = false): GameState {
   const mingleStandings = Object.fromEntries(remaining(s).map((g) => [g.id, g.favours]));
   const here = remaining(s).length;
   const planned = unmaskingsFor({ remaining: here, unmaskings: here - 2, rounds: s.rounds - s.round + 1 });
-  return { ...s, phase: "mingle", deadline: at + MINGLE_MS, mingleStandings, planned };
+  // Round 1's Overture plays as the doors close; the Mingle keeps its four minutes after it.
+  const opens = overture ? at + OVERTURE_MS : at;
+  const next: GameState = { ...s, phase: "mingle", deadline: opens + MINGLE_MS, mingleStandings, planned, overtureUntil: overture ? opens : s.overtureUntil };
+  narrate(next, "mingle", opens);
+  return next;
 }
 
 /** Everything a guest may see; null for someone who has no seat. */
@@ -465,17 +525,18 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
   const guests = state.guests.map(({ id, name, mask, unmaskedIn, left }) => ({ id, name, mask: { ...mask }, unmasked: unmaskedIn !== undefined, left: left === true, disconnected: state.absent.includes(id) }));
   const ghost = me.unmaskedIn !== undefined;
   const seated = { you: guest, host: state.host, guests, rooms: state.rooms.map((r) => ({ id: r.id, members: [...r.members] })), chats: talkSheet(state, guest),
-    along: ghost && state.along ? alongView(state.along, guest) : null, predictions: ghost ? predictionsView(state) : null };
+    along: ghost && state.along ? alongView(state.along, guest) : null, predictions: ghost ? predictionsView(state) : null,
+    narrator: narratorView(state, guest), prelude: preludeView(state, guest) };
   const def = state.danceDef;
-  const announcement = def && { name: def.name, encore: state.danceEncore, rulesSummary: def.rulesSummary, workedExample: def.workedExample, masks: !!def.masks };
+  const announcement = def && { name: def.name, encore: state.danceEncore, rulesSummary: def.rulesSummary, workedExample: def.workedExample, prelude: def.prelude, masks: !!def.masks };
   const publicFavours = () => Object.fromEntries(remaining(state).map((g) => [g.id, g.favours]));
   const cellarGame = () => {
     const d = state.cellar!.def;
-    return { name: d.name, encore: state.cellar!.encore, rulesSummary: d.rulesSummary, workedExample: d.workedExample, masks: !!d.masks };
+    return { name: d.name, encore: state.cellar!.encore, rulesSummary: d.rulesSummary, workedExample: d.workedExample, prelude: d.prelude, masks: !!d.masks };
   };
   switch (state.phase) {
     case "mingle":
-      return { ...seated, phase: "mingle", round: state.round, deadline: state.deadline!, favours: me.favours,
+      return { ...seated, phase: "mingle", round: state.round, deadline: state.deadline!, overtureUntil: state.round === 1 ? state.overtureUntil : null, favours: me.favours,
         standings: { ...state.mingleStandings },
         gifts: state.gifts.filter((x) => x.round === state.round && (x.from === guest || x.to === guest)).map(({ from, to, favours }) => ({ from, to, favours })),
         announcement: announcement!,
@@ -484,7 +545,9 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
       const race = state.match;
       const auction = state.auction;
       const bluff = state.bluff;
-      const playing = guest in (bluff ?? auction ?? race!).points;
+      // Before the match starts, the Prelude plays and there is nothing to play yet.
+      const running = bluff ?? auction ?? race;
+      const playing = !!running && guest in running.points;
       return {
         ...seated,
         phase: "dance",
@@ -495,7 +558,7 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
         step: race && playing ? stepView(race, guest) : null,
         auction: auction && playing ? auctionView(auction, guest) : null,
         bluff: bluff && playing ? bluffView(bluff, guest) : null,
-        ranking: leaversLast(state, bluff ? rankBluff(bluff) : auction ? rankAuction(auction) : rankRace(race!)),
+        ranking: !running ? [] : leaversLast(state, bluff ? rankBluff(bluff) : auction ? rankAuction(auction) : rankRace(race!)),
       };
     }
     case "sentDown":
@@ -545,7 +608,7 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
         ...seated,
         phase: "lastDance",
         ...lastDanceView(state, guest),
-        announcement: { name: ld.def.name, encore: ld.encore, rulesSummary: ld.def.rulesSummary, workedExample: ld.def.workedExample, masks: !!ld.def.masks },
+        announcement: { name: ld.def.name, encore: ld.encore, rulesSummary: ld.def.rulesSummary, workedExample: ld.def.workedExample, prelude: ld.def.prelude, masks: !!ld.def.masks },
         buyRate: ld.def.buyRate,
         yourFavours: me.favours,
         favours: over ? publicFavours() : null,
@@ -625,6 +688,7 @@ function leave(state: GameState, id: GuestId, now: number): ApplyResult {
     l.stage = "ended";
     l.endedAt = now;
     if (s.along) s.along.done = true;
+    s.prelude = null;
     s.deadline = now + DELETE_AFTER_MS;
     return { ok: true, state: s };
   }

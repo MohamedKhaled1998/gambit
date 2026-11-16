@@ -192,6 +192,21 @@ describe("the clock", () => {
   const alarmOf = (code: string) =>
     runInDurableObject(env.Game.get(env.Game.idFromName(code)), async (_i, state) => state.storage.getAlarm());
 
+  /** Fires the alarm at the Mingle's end, then on through the Narrator's line and the Prelude until the match is under way. */
+  async function intoMatch(code: string, host: Client, mingleDeadline: number) {
+    const stub = env.Game.get(env.Game.idFromName(code));
+    let at = mingleDeadline + 10;
+    for (let i = 0; i < 5; i++) {
+      vi.setSystemTime(at);
+      await runDurableObjectAlarm(stub);
+      await host.until(() => host.lastView()?.phase === "dance");
+      const v = host.lastView() as Extract<GuestView, { phase: "dance" }>;
+      if (!v.prelude) return;
+      at = v.prelude.endsAt + 10;
+    }
+    throw new Error("the Prelude never ended");
+  }
+
   afterEach(() => vi.useRealTimers());
 
   it("keeps one alarm on the Mingle's deadline and stamps views with the server's time", async () => {
@@ -206,9 +221,7 @@ describe("the clock", () => {
     const { grant, host } = await startedRaceGame();
     const mingle = host.lastView() as Extract<GuestView, { phase: "mingle" }>;
     vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(mingle.deadline + 10);
-    await runDurableObjectAlarm(env.Game.get(env.Game.idFromName(grant.code)));
-    await host.until(() => host.lastView()?.phase === "dance");
+    await intoMatch(grant.code, host, mingle.deadline);
     const dance = host.lastView() as Extract<GuestView, { phase: "dance" }>;
     expect(dance.step!.index).toBe(0);
     expect(await alarmOf(grant.code)).toBe(dance.step!.deadline);
@@ -219,9 +232,7 @@ describe("the clock", () => {
     const mingle = host.lastView() as Extract<GuestView, { phase: "mingle" }>;
     const stub = env.Game.get(env.Game.idFromName(grant.code));
     vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(mingle.deadline + 10);
-    await runDurableObjectAlarm(stub);
-    await host.until(() => host.lastView()?.phase === "dance");
+    await intoMatch(grant.code, host, mingle.deadline);
     // A match with a study phase takes answers only once the prompt is hidden.
     const study = (host.lastView() as Extract<GuestView, { phase: "dance" }>).step!;
     if (study.stage === "study") {
@@ -235,7 +246,7 @@ describe("the clock", () => {
     expect((others[0]!.client.lastView() as Extract<GuestView, { phase: "dance" }>).step!.yourAnswer).toBeNull();
     host.send({ type: "action", id: "a2", action: { type: "answer", position: 2 } });
     await host.until(() => host.errors().includes("already answered"));
-    vi.setSystemTime(mingle.deadline + 40_000);
+    vi.setSystemTime(mingle.deadline + 900_000);
     others[1]!.client.send({ type: "action", id: "late", action: { type: "answer", position: 0 } });
     await others[1]!.client.until(() => others[1]!.client.errors().includes("too late"));
   });
@@ -244,9 +255,7 @@ describe("the clock", () => {
     const { grant, host } = await startedGame();
     const mingle = host.lastView() as Extract<GuestView, { phase: "mingle" }>;
     vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(mingle.deadline + 10);
-    await runDurableObjectAlarm(env.Game.get(env.Game.idFromName(grant.code)));
-    await host.until(() => host.lastView()?.phase === "dance");
+    await intoMatch(grant.code, host, mingle.deadline);
     const before = host.lastView() as Extract<GuestView, { phase: "dance" }>;
     const was = before.ranking.find((r) => r.guest === grant.guest)!.points;
     host.send({ type: "action", id: "b", action: { type: "buyPoints", favours: 2 } });

@@ -48,8 +48,12 @@ export const DANCE_MS = 5 * 60_000;
 export const SENT_DOWN_MS = 60_000;
 export const CELLAR_MS = 3 * 60_000;
 export const UNMASKING_MS = 60_000;
-/** The Last Dance: the Narrator's line and the Prelude, before its match. */
-export const LAST_DANCE_INTRO_MS = 65_000;
+/** The Overture plays as the Foyer's doors close, before round 1's Mingle. */
+export const OVERTURE_MS = 30_000;
+/** A Cellar game's Prelude starts this far into the sent-down reveal, after the Narrator's lines. */
+export const SENT_DOWN_LINES_MS = 30_000;
+/** How long a short announcement stays up as a caption. */
+export const ANNOUNCEMENT_MS = 4_000;
 /** An address: the match winner's floor, then the loser's. */
 export const ADDRESS_MS = 60_000;
 /** Open questions after both addresses. */
@@ -76,6 +80,48 @@ export const DANCE_PAYOUTS: Record<number, readonly number[]> = {
   10: [3, 2, 1, 1, 0, 0, -1, -1, -2, -3],
 };
 
+/** Ana, Ben and Cy: the made-up guests a Prelude's worked example is played by. */
+export const PRELUDE_GUESTS: PublicGuest[] = [
+  { id: "ana", name: "Ana", mask: { colour: "gold", shape: "fox", trim: "pearls", feathers: 2 }, unmasked: false, left: false, disconnected: false },
+  { id: "ben", name: "Ben", mask: { colour: "sapphire", shape: "owl", trim: null, feathers: 1 }, unmasked: false, left: false, disconnected: false },
+  { id: "cy", name: "Cy", mask: { colour: "emerald", shape: "cat", trim: "lace", feathers: 3 }, unmasked: false, left: false, disconnected: false },
+];
+
+/** What a Prelude's beat shows on the match's real play screen, with Ana, Ben and Cy (ids "ana", "ben", "cy"). */
+export type PreludeScreen =
+  | {
+      kind: "step";
+      stage: "study" | "answer" | "reveal";
+      study?: Study;
+      prompt: string;
+      promptMasks?: Mask[];
+      choices: string[];
+      choiceMasks?: Mask[];
+      grid?: { cols: number };
+      /** The position each made-up guest tapped, once they have. */
+      taps?: Record<string, number>;
+      /** Shown at the reveal. */
+      correct?: number;
+      lightsOut?: boolean;
+    }
+  | { kind: "lot"; stage: "bid" | "reveal"; lot: number; points: number; bids?: { guest: string; amount: number }[]; winner?: string; price?: number }
+  | {
+      kind: "toast";
+      stage: "claim" | "call" | "reveal";
+      /** The card the viewer's own made-up guest holds. */
+      card: number;
+      claims?: Record<string, number>;
+      calls?: { caller: string; target: string }[];
+      cards?: Record<string, number>;
+    };
+
+/** One beat of a Prelude: a caption over a screen for some seconds. Captions are always on. */
+export interface PreludeBeat {
+  seconds: number;
+  caption: string;
+  screen?: PreludeScreen;
+}
+
 /** A match on the Race match type: data only. */
 export interface RaceMatchDef {
   id: string;
@@ -90,7 +136,10 @@ export interface RaceMatchDef {
   answerSeconds: number;
   /** Answer, then the step reveal. */
   stepSeconds: number;
+  /** The Prelude's target length; its script may come in shorter, never longer. */
   preludeSeconds: number;
+  /** The worked example played on the match's real screens, scripted in beats. */
+  prelude: PreludeBeat[];
   pointsPerCorrect: number;
   /** Points one favour buys. */
   buyRate: number;
@@ -132,7 +181,10 @@ export interface SealedBidMatchDef {
   answerSeconds: number;
   /** Bid, then the reveal. */
   stepSeconds: number;
+  /** The Prelude's target length; its script may come in shorter, never longer. */
   preludeSeconds: number;
+  /** The worked example played on the match's real screens, scripted in beats. */
+  prelude: PreludeBeat[];
   buyRate: number;
   tieBreak: ("points" | "lots" | "draw")[];
   oncePerGame?: boolean;
@@ -156,7 +208,10 @@ export interface BluffMatchDef {
   answerSeconds: number;
   /** Claim, call, then the reveal. */
   stepSeconds: number;
+  /** The Prelude's target length; its script may come in shorter, never longer. */
   preludeSeconds: number;
+  /** The worked example played on the match's real screens, scripted in beats. */
+  prelude: PreludeBeat[];
   buyRate: number;
   tieBreak: ("points" | "calls" | "draw")[];
   oncePerGame?: boolean;
@@ -366,6 +421,29 @@ export interface LastDanceState {
   endedAt: number | null;
 }
 
+/** The Narrator's lines that play in full the first time and as a short announcement after. */
+export type LineId = "mingle" | "dance" | "sentDown" | "unmasking" | "lastDance";
+
+/** The Narrator's line for the phase that just opened. */
+export interface Narration {
+  id: LineId;
+  /** The first time it plays this game: the full line; otherwise a short announcement. */
+  first: boolean;
+  startedAt: number;
+  seconds: number;
+  /** Who hears it: null for every guest, else only these guests (the Cellar, the newly unmasked). */
+  audience: GuestId[] | null;
+}
+
+/** A Prelude waiting to play or playing: one copy per phone, started together by the game's clock. */
+export interface PreludeState {
+  kind: "dance" | "cellar" | "lastDance";
+  startsAt: number;
+  endsAt: number;
+  /** Guests who skipped to the Rules card; the match starts early once everyone in it is here. */
+  skipped: GuestId[];
+}
+
 export interface GameState {
   phase: "foyer" | "mingle" | "dance" | "sentDown" | "cellar" | "unmasking" | "lastDance" | "ended";
   format: Format;
@@ -408,6 +486,14 @@ export interface GameState {
   planned: number;
   /** The guests not connected right now, as the server last reported; only a marker, never a rule. */
   absent: GuestId[];
+  /** The Narrator's lines already played in full this game. */
+  told: LineId[];
+  /** The line for the phase now running, if any. */
+  narration: Narration | null;
+  /** The Prelude before the match now starting, if any; the Dance, the Cellar game or the Last Dance's match. */
+  prelude: PreludeState | null;
+  /** When round 1's Overture ends; null before the game starts. */
+  overtureUntil: number | null;
 }
 
 export type Action =
@@ -424,6 +510,7 @@ export type Action =
   | { type: "leaveRoom"; guest: GuestId; room: string }
   | { type: "predict"; guest: GuestId; picks: GuestId[] }
   | { type: "vote"; guest: GuestId; finalist: GuestId }
+  | { type: "skipPrelude"; guest: GuestId }
   | { type: "leave"; guest: GuestId }
   | { type: "endGame"; guest: GuestId }
   /** The Host asks for a re-join link for a guest; the state doesn't change, the server issues the seat. */
@@ -476,6 +563,8 @@ export type Rejection =
   | "the Jury was counted when the vote opened"
   | "name a finalist"
   | "already voted"
+  | "no Prelude is playing"
+  | "already skipped"
   | "already unmasked"
   | "you left the party"
   | "the last two can't leave before the Last Dance"
@@ -563,12 +652,30 @@ export interface BluffView {
   reveal: { calls: { caller: GuestId; target: GuestId }[]; cards: Record<GuestId, number> } | null;
 }
 
+/** The Narrator's line as a guest hears it: a caption at `startedAt`, for `seconds`. */
+export interface NarratorLine {
+  id: LineId;
+  first: boolean;
+  text: string;
+  startedAt: number;
+  seconds: number;
+}
+
+/** The Prelude before a match: when it plays, and whether this guest has skipped to the Rules card. */
+export interface PreludeView {
+  startsAt: number;
+  endsAt: number;
+  skipped: boolean;
+}
+
 export interface Announcement {
   name: string;
   /** Drawn a second time this game: fresh problems, no Prelude. */
   encore: boolean;
   rulesSummary: string;
   workedExample: string;
+  /** The Prelude's script: played at the start, and replayed on demand (an Encore doesn't play it itself). */
+  prelude: PreludeBeat[];
   /** Show the strip of the six colours with their names. */
   masks: boolean;
 }
@@ -583,6 +690,10 @@ interface Seated {
   chats: ChatAccess;
   /** Unmasked guests only: the match they play along with. Null for everyone else, and while there is nothing to play. */
   along: AlongView | null;
+  /** The Narrator's line for this phase, when it is meant for this guest. */
+  narrator: NarratorLine | null;
+  /** The Prelude before the match now starting, while there is one. */
+  prelude: PreludeView | null;
   /** Unmasked guests only: the Cellar game predictions, live. Null for everyone else until the end screen. */
   predictions: PredictionsView | null;
 }
@@ -641,6 +752,8 @@ export type GuestView =
       phase: "mingle";
       round: number;
       deadline: number;
+      /** Round 1 only: when the Overture ends and the Mingle proper begins. */
+      overtureUntil: number | null;
       /** Your own live balance. */
       favours: number;
       /** Everyone's totals as the Mingle began; gifts never move them. */
@@ -782,11 +895,12 @@ export type ClientAction =
   | { type: "leaveRoom"; room: string }
   | { type: "predict"; picks: GuestId[] }
   | { type: "vote"; finalist: GuestId }
+  | { type: "skipPrelude" }
   | { type: "leave" }
   | { type: "endGame" }
   | { type: "rejoinLink"; target: GuestId };
 
-const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "bid", "claim", "call", "buyPoints", "gift", "openRoom", "leaveRoom", "predict", "vote", "leave", "endGame", "rejoinLink"] satisfies ClientAction["type"][];
+const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "bid", "claim", "call", "buyPoints", "gift", "openRoom", "leaveRoom", "predict", "vote", "skipPrelude", "leave", "endGame", "rejoinLink"] satisfies ClientAction["type"][];
 
 /** True only for the actions a client may send; never `tick`, which only the alarm sends. */
 export function isClientAction(value: unknown): value is ClientAction {

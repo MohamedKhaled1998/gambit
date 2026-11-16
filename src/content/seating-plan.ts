@@ -1,4 +1,5 @@
 import type { RaceMatchDef } from "../shared/types";
+import { DEMO_GRID } from "./demo";
 
 /** Seating Plan: a grid of masks shows, the lights go out, tap where the named mask sat. */
 export const SEATING_PLAN: RaceMatchDef = {
@@ -15,6 +16,13 @@ export const SEATING_PLAN: RaceMatchDef = {
   answerSeconds: 8,
   stepSeconds: 16,
   preludeSeconds: 45,
+  prelude: [
+    { seconds: 9, caption: "Ana, Ben and Cy take their seats: a four by four grid shows for five seconds. The silver fox sits top right.", screen: { kind: "step", stage: "study", prompt: "", choices: [], study: { kind: "grid", masks: DEMO_GRID, cols: 4 }, grid: { cols: 4 } } },
+    { seconds: 9, caption: "The lights go out. Where was the silver fox?", screen: { kind: "step", stage: "answer", prompt: "", promptMasks: [DEMO_GRID[3]!], choices: DEMO_GRID.map(() => "cell"), grid: { cols: 4 }, lightsOut: true } },
+    { seconds: 9, caption: "Your grid is laid out in your own order. Ben saw it top right on his layout and taps there. Ana taps the cell beside it.", screen: { kind: "step", stage: "answer", prompt: "", promptMasks: [DEMO_GRID[3]!], choices: DEMO_GRID.map(() => "cell"), grid: { cols: 4 }, lightsOut: true, taps: { ben: 3, ana: 2 } } },
+    { seconds: 9, caption: "Ben scores ten points. Ana scores nothing, and Cy ran out of time.", screen: { kind: "step", stage: "reveal", prompt: "", promptMasks: [DEMO_GRID[3]!], choices: DEMO_GRID.map(() => "cell"), grid: { cols: 4 }, taps: { ben: 3, ana: 2 }, correct: 3 } },
+    { seconds: 9, caption: "Only your memory helps. Favours buy extra points, five each.", screen: { kind: "step", stage: "reveal", prompt: "", promptMasks: [DEMO_GRID[3]!], choices: DEMO_GRID.map(() => "cell"), grid: { cols: 4 }, taps: { ben: 3, ana: 2 }, correct: 3 } },
+  ],
   pointsPerCorrect: 10,
   buyRate: 5,
   tieBreak: ["points", "time", "draw"],

@@ -17,6 +17,15 @@ export const LIARS_TOAST: BluffMatchDef = {
   answerSeconds: 15,
   stepSeconds: 35,
   preludeSeconds: 70,
+  prelude: [
+    { seconds: 10, caption: "Ana, Ben and Cy each get a secret card, 1 to 9. Ana holds 4.", screen: { kind: "toast", stage: "claim", card: 4 } },
+    { seconds: 10, caption: "Everyone toasts a claim of their card's value. Ana claims 8. Ben claims 6. Cy claims 3.", screen: { kind: "toast", stage: "claim", card: 4, claims: { ana: 8, ben: 6, cy: 3 } } },
+    { seconds: 10, caption: "Claims are public. Now each guest may secretly call one other guest a liar, or no one.", screen: { kind: "toast", stage: "call", card: 4, claims: { ana: 8, ben: 6, cy: 3 } } },
+    { seconds: 10, caption: "Ben calls Ana. Cy calls Ben.", screen: { kind: "toast", stage: "call", card: 4, claims: { ana: 8, ben: 6, cy: 3 }, calls: [{ caller: "ben", target: "ana" }, { caller: "cy", target: "ben" }] } },
+    { seconds: 10, caption: "Ana was lying, holding 4: she scores nothing, and Ben scores her claim, 8.", screen: { kind: "toast", stage: "reveal", card: 4, claims: { ana: 8, ben: 6, cy: 3 }, calls: [{ caller: "ben", target: "ana" }, { caller: "cy", target: "ben" }], cards: { ana: 4, ben: 7 } } },
+    { seconds: 10, caption: "Ben told the truth, holding 7, so he scores his claim, 6, and 5 extra for the call against him.", screen: { kind: "toast", stage: "reveal", card: 4, claims: { ana: 8, ben: 6, cy: 3 }, calls: [{ caller: "ben", target: "ana" }, { caller: "cy", target: "ben" }], cards: { ana: 4, ben: 7 } } },
+    { seconds: 10, caption: "Nobody called Cy, so Cy scores 3 and the card stays hidden. Favours buy extra points, three each.", screen: { kind: "toast", stage: "reveal", card: 4, claims: { ana: 8, ben: 6, cy: 3 }, calls: [{ caller: "ben", target: "ana" }, { caller: "cy", target: "ben" }], cards: { ana: 4, ben: 7 } } },
+  ],
   buyRate: 3,
   tieBreak: ["points", "calls", "draw"],
 };

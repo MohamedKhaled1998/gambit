@@ -22,6 +22,14 @@ export const GILDED_AUCTION: SealedBidMatchDef = {
   answerSeconds: 20,
   stepSeconds: 25,
   preludeSeconds: 60,
+  prelude: [
+    { seconds: 10, caption: "Ana, Ben and Cy each start with 50 points. A lot comes up with a public value: this one is worth 30.", screen: { kind: "lot", stage: "bid", lot: 30, points: 50 } },
+    { seconds: 10, caption: "Everyone bids in secret, from nothing up to all they hold. The highest bid pays what it bid.", screen: { kind: "lot", stage: "bid", lot: 30, points: 50 } },
+    { seconds: 10, caption: "Ana bids 12. Ben bids 18. Cy bids nothing.", screen: { kind: "lot", stage: "bid", lot: 30, points: 50, bids: [{ guest: "ana", amount: 12 }, { guest: "ben", amount: 18 }, { guest: "cy", amount: 0 }] } },
+    { seconds: 10, caption: "The reveal names every bid. Ben pays 18 and gains 30: 50 points become 62.", screen: { kind: "lot", stage: "reveal", lot: 30, points: 62, bids: [{ guest: "ben", amount: 18 }, { guest: "ana", amount: 12 }, { guest: "cy", amount: 0 }], winner: "ben", price: 18 } },
+    { seconds: 10, caption: "Losers pay nothing. Ana stays at 50. Equal bids go to the first in.", screen: { kind: "lot", stage: "reveal", lot: 30, points: 50, bids: [{ guest: "ben", amount: 18 }, { guest: "ana", amount: 12 }, { guest: "cy", amount: 0 }], winner: "ben", price: 18 } },
+    { seconds: 10, caption: "Promises are only promises: a guest may say they'll stay off a lot, and betray you. Favours buy extra points, five each.", screen: { kind: "lot", stage: "reveal", lot: 30, points: 50, bids: [{ guest: "ben", amount: 18 }, { guest: "ana", amount: 12 }, { guest: "cy", amount: 0 }], winner: "ben", price: 18 } },
+  ],
   buyRate: 5,
   tieBreak: ["points", "lots", "draw"],
 };

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { MINGLE_MS, SENT_DOWN_MS, UNMASKING_MS, type ClientAction, type GuestView, type StepView, type AlongView, type AuctionView, type BluffView, type PredictionsView, type PredictionsReveal, type PublicGuest, type RankingEntry } from "../shared/types";
+import { MINGLE_MS, SENT_DOWN_MS, UNMASKING_MS, type ClientAction, type GuestView, type StepView, type AlongView, type Announcement, type PreludeView, type AuctionView, type BluffView, type PredictionsView, type PredictionsReveal, type PublicGuest, type RankingEntry } from "../shared/types";
 import { ColourStrip, MaskIcon, maskLabel } from "./mask";
 import { rejoinLink } from "./connection";
+import { Caption, PreludeSection } from "./prelude";
 import { Talk, type TalkLink } from "./talk";
 
 type Act = (action: ClientAction) => void;
@@ -203,9 +204,7 @@ function LastDance({ view, now, act }: { view: Extract<GuestView, { phase: "last
       {view.stage === "intro" && (
         <>
           <h2>{view.announcement.name}{view.announcement.encore ? " (an Encore)" : ""}</h2>
-          <p>{view.announcement.rulesSummary}</p>
-          <p><em>{view.announcement.workedExample}</em></p>
-          {view.announcement.masks && <ColourStrip />}
+          <Teaching announcement={view.announcement} view={view} now={now} act={act} />
         </>
       )}
       {view.stage === "match" && (
@@ -392,12 +391,21 @@ function Party({ view, code, links, act }: { view: Exclude<GuestView, { phase: "
   );
 }
 
+/** The match's Prelude and Rules card; the worked example plays on the match's own panels, with Ana, Ben and Cy. */
+function Teaching({ announcement, view, now, act, cardOpen }: { announcement: Announcement; view: { prelude: PreludeView | null }; now: number; act: Act; cardOpen?: boolean | undefined }) {
+  return (
+    <PreludeSection announcement={announcement} prelude={view.prelude} now={now} act={act} cardOpen={cardOpen}
+      renderScreen={(v, guests, at) => v.bluff ? <ToastPanel bluff={v.bluff} guests={guests} you="ana" favours={5} buyRate={0} now={at} act={() => {}} /> : v.auction ? <BidPanel auction={v.auction} guests={guests} you="ana" favours={5} buyRate={0} now={at} act={() => {}} /> : <StepPanel step={v.step!} favours={5} buyRate={0} now={at} act={() => {}} />} />
+  );
+}
+
 export function Game({ view, offset, act, error, talk, cover, code, links }: { view: Exclude<GuestView, { phase: "foyer" }>; offset: number; act: Act; error: string | null; talk: TalkLink; cover(): void; code: string; links: Record<string, string> }) {
   const now = useServerNow(offset);
   return (
     <div className="salon">
     <main>
       {view.phase !== "lastDance" && view.phase !== "ended" && <PhaseRail phase={view.phase} />}
+      <Caption narrator={view.narrator} overtureUntil={view.phase === "mingle" ? view.overtureUntil : null} now={now} />
       {view.phase === "mingle" && (
         <>
           <h1>The Mingle</h1>
@@ -405,15 +413,14 @@ export function Game({ view, offset, act, error, talk, cover, code, links }: { v
           <p>You hold <strong>{view.favours}</strong> favours.</p>
           <GiftScreen view={view} act={act} />
           <h2>Tonight's Dance: {view.announcement.name}</h2>
-          <p>{view.announcement.rulesSummary}</p>
-          <p><em>{view.announcement.workedExample}</em></p>
-          {view.announcement.masks && <ColourStrip />}
+          <Teaching announcement={view.announcement} view={view} now={now} act={act} cardOpen />
         </>
       )}
       {view.phase === "dance" && (
         <>
           <h1>{view.announcement.name}</h1>
-          {view.bluff ? <ToastPanel bluff={view.bluff} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.auction ? <BidPanel auction={view.auction} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.step ? <StepPanel step={view.step} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : <p>You are watching from the Balcony.</p>}
+          <Teaching announcement={view.announcement} view={view} now={now} act={act} />
+          {view.bluff ? <ToastPanel bluff={view.bluff} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.auction ? <BidPanel auction={view.auction} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.step ? <StepPanel step={view.step} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.prelude ? null : <p>You are watching from the Balcony.</p>}
           <h2>The running ranking</h2>
           <Ranking ranking={view.ranking} guests={view.guests} you={view.you} />
         </>
@@ -440,8 +447,7 @@ export function Game({ view, offset, act, error, talk, cover, code, links }: { v
           <ul>{view.cellar.map((id) => <li key={id} className={id === view.you ? "me" : ""}><Name guests={view.guests} id={id} /></li>)}</ul>
           <p>{view.unmaskings === 0 ? "A warm-up round: nobody is unmasked tonight." : `The Cellar game unmasks ${view.unmaskings}.`}</p>
           <h2>The Cellar game: {view.cellarGame.name}{view.cellarGame.encore ? " (an Encore)" : ""}</h2>
-          <p>{view.cellarGame.rulesSummary}</p>
-          {view.cellarGame.masks && <ColourStrip />}
+          <Teaching announcement={view.cellarGame} view={view} now={now} act={act} />
         </>
       )}
       {view.phase === "cellar" && (

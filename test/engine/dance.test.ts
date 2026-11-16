@@ -8,9 +8,12 @@ vi.mock("../../src/content/library", async () => {
   return { LIBRARY: [THE_TALLY, THE_PROCESSION] };
 });
 import { apply, nextDeadline, viewFor } from "../../src/engine/game";
-import { DANCE_PAYOUTS, DANCE_MS, MINGLE_MS } from "../../src/shared/types";
+import { DANCE_PAYOUTS, DANCE_MS, MINGLE_MS, OVERTURE_MS } from "../../src/shared/types";
 import type { GuestView } from "../../src/shared/types";
 import { foyerWith, intoDance, mixedPlayer, must, playDance, started, tickToDeadline } from "./sim";
+
+/** When the match of `started(4, 2)` starts: after the Overture, the Narrator's lines and the Prelude. */
+const T0 = intoDance(started(4, 2)).match!.stepStartedAt;
 
 const ranking = (s: ReturnType<typeof started>) => s.danceResult!.ranking.map((r) => r.guest);
 
@@ -18,32 +21,36 @@ describe("Round 1's clock", () => {
   it("opens with a 4-minute Mingle that announces the Dance", () => {
     const s = started(5, 1, 1000);
     expect(s.phase).toBe("mingle");
-    expect(nextDeadline(s)).toBe(1000 + MINGLE_MS);
+    expect(nextDeadline(s)).toBe(1000 + OVERTURE_MS + MINGLE_MS);
     expect(viewFor(s, "g1")).toMatchObject({ phase: "mingle", round: 1, announcement: { name: "The Tally" } });
   });
 
-  it("moves to the Dance only through a tick at the deadline", () => {
+  it("moves to the Dance only through a tick at the deadline, and starts the match after the Prelude", () => {
     const s = started(5, 1, 0);
-    expect(must(s, { type: "tick" }, MINGLE_MS - 1)).toEqual(s);
-    const dance = must(s, { type: "tick" }, MINGLE_MS);
+    const mingleEnds = OVERTURE_MS + MINGLE_MS;
+    expect(must(s, { type: "tick" }, mingleEnds - 1)).toEqual(s);
+    const dance = must(s, { type: "tick" }, mingleEnds);
     expect(dance.phase).toBe("dance");
-    expect(dance.match!.stepStartedAt).toBe(MINGLE_MS);
+    expect(dance.match).toBeNull();
+    const playing = intoDance(s);
+    expect(playing.match!.stepStartedAt).toBe(dance.prelude!.endsAt);
   });
 
   it("keeps time on the clock when a tick comes late", () => {
-    const late = must(started(5, 1, 0), { type: "tick" }, MINGLE_MS + 40_000);
-    expect(late.match!.step).toBe(2); // 18s steps measured from the Dance's start, not from the late tick
-    expect(late.match!.stepStartedAt).toBe(MINGLE_MS + 36_000);
+    const start = intoDance(started(5, 1, 0)).match!.stepStartedAt;
+    const late = must(started(5, 1, 0), { type: "tick" }, start + 40_000);
+    expect(late.match!.step).toBe(2); // 18s steps measured from the match's start, not from the late tick
+    expect(late.match!.stepStartedAt).toBe(start + 36_000);
   });
 
   it("finishes the Dance inside its 5 minutes and shows the sent-down screen", () => {
     const s = playDance(started(6, 3, 0), () => null);
     expect(s.phase).toBe("sentDown");
-    expect(nextDeadline(s)).toBe(s.match!.deadline + 60_000);
+    expect(nextDeadline(s)).toBe(Math.max(s.match!.deadline + 60_000, s.prelude?.endsAt ?? 0)); // a longer Cellar Prelude runs the reveal on
     expect(s.danceResult!.ranking).toHaveLength(6);
     // 12 steps of 18s each from the start of the Dance.
     const dance = intoDance(started(6, 3, 0));
-    expect(dance.match!.deadline - MINGLE_MS).toBeLessThanOrEqual(DANCE_MS);
+    expect(dance.match!.deadline - dance.match!.stepStartedAt).toBeLessThanOrEqual(DANCE_MS);
   });
 });
 
@@ -92,8 +99,8 @@ describe("The Tally", () => {
   it("scores 10 for a right answer, 0 for a wrong one and none, and shows only the guest's own answer before the reveal", () => {
     let s = intoDance(started(4, 2));
     const right = (g: string) => s.match!.layouts[g]![0]!.indexOf(0);
-    s = must(s, { type: "answer", guest: "g0", position: right("g0") }, MINGLE_MS + 4000);
-    s = must(s, { type: "answer", guest: "g1", position: (right("g1") + 1) % 4 }, MINGLE_MS + 5000);
+    s = must(s, { type: "answer", guest: "g0", position: right("g0") }, T0 + 4000);
+    s = must(s, { type: "answer", guest: "g1", position: (right("g1") + 1) % 4 }, T0 + 5000);
     const v0 = viewFor(s, "g0") as Extract<GuestView, { phase: "dance" }>;
     expect(v0.step!.yourAnswer).toBe(right("g0"));
     expect(v0.step!.reveal).toBeNull();
@@ -108,18 +115,18 @@ describe("The Tally", () => {
 
   it("rejects a late answer and a second answer, and takes one answer per step", () => {
     const s = intoDance(started(4, 2));
-    expect(apply(s, { type: "answer", guest: "g0", position: 0 }, MINGLE_MS + 15_000)).toEqual({ ok: false, reason: "too late" });
-    const once = must(s, { type: "answer", guest: "g0", position: 0 }, MINGLE_MS + 14_999);
-    expect(apply(once, { type: "answer", guest: "g0", position: 1 }, MINGLE_MS + 14_999)).toEqual({ ok: false, reason: "already answered" });
-    expect(apply(s, { type: "answer", guest: "g0", position: 4 }, MINGLE_MS + 1)).toEqual({ ok: false, reason: "no such choice" });
+    expect(apply(s, { type: "answer", guest: "g0", position: 0 }, T0 + 15_000)).toEqual({ ok: false, reason: "too late" });
+    const once = must(s, { type: "answer", guest: "g0", position: 0 }, T0 + 14_999);
+    expect(apply(once, { type: "answer", guest: "g0", position: 1 }, T0 + 14_999)).toEqual({ ok: false, reason: "already answered" });
+    expect(apply(s, { type: "answer", guest: "g0", position: 4 }, T0 + 1)).toEqual({ ok: false, reason: "no such choice" });
     expect(apply(started(4, 2), { type: "answer", guest: "g0", position: 0 }, 1)).toEqual({ ok: false, reason: "no Dance is running" });
   });
 
   it("ends a step early when every guest has answered", () => {
     let s = intoDance(started(4, 2));
-    for (const g of s.guests) s = must(s, { type: "answer", guest: g.id, position: 0 }, MINGLE_MS + 2000);
+    for (const g of s.guests) s = must(s, { type: "answer", guest: g.id, position: 0 }, T0 + 2000);
     expect(s.match!.stage).toBe("reveal");
-    expect(nextDeadline(s)).toBe(MINGLE_MS + 5000);
+    expect(nextDeadline(s)).toBe(T0 + 5000);
   });
 
   it("counts the full answer window as the time of a missing answer", () => {
@@ -132,7 +139,7 @@ describe("buying points", () => {
   const inDance = () => intoDance(started(4, 2));
 
   it("turns 1 favour into 5 points and the favour vanishes", () => {
-    const s = must(inDance(), { type: "buyPoints", guest: "g1", favours: 3 }, MINGLE_MS + 100);
+    const s = must(inDance(), { type: "buyPoints", guest: "g1", favours: 3 }, T0 + 100);
     expect(s.match!.points.g1).toBe(15);
     expect(s.guests.find((g) => g.id === "g1")!.favours).toBe(7);
     expect((viewFor(s, "g1") as Extract<GuestView, { phase: "dance" }>).favours).toBe(7);
@@ -140,23 +147,23 @@ describe("buying points", () => {
 
   it("never takes favours below 0", () => {
     const s = inDance();
-    expect(apply(s, { type: "buyPoints", guest: "g1", favours: 11 }, MINGLE_MS)).toEqual({ ok: false, reason: "not enough favours" });
-    const broke = must(s, { type: "buyPoints", guest: "g1", favours: 10 }, MINGLE_MS);
-    expect(apply(broke, { type: "buyPoints", guest: "g1", favours: 1 }, MINGLE_MS)).toEqual({ ok: false, reason: "not enough favours" });
-    expect(apply(s, { type: "buyPoints", guest: "g1", favours: 0 }, MINGLE_MS)).toEqual({ ok: false, reason: "bad amount" });
-    expect(apply(s, { type: "buyPoints", guest: "g1", favours: 1.5 }, MINGLE_MS)).toEqual({ ok: false, reason: "bad amount" });
+    expect(apply(s, { type: "buyPoints", guest: "g1", favours: 11 }, T0)).toEqual({ ok: false, reason: "not enough favours" });
+    const broke = must(s, { type: "buyPoints", guest: "g1", favours: 10 }, T0);
+    expect(apply(broke, { type: "buyPoints", guest: "g1", favours: 1 }, T0)).toEqual({ ok: false, reason: "not enough favours" });
+    expect(apply(s, { type: "buyPoints", guest: "g1", favours: 0 }, T0)).toEqual({ ok: false, reason: "bad amount" });
+    expect(apply(s, { type: "buyPoints", guest: "g1", favours: 1.5 }, T0)).toEqual({ ok: false, reason: "bad amount" });
   });
 
   it("works in any step of the match, including a reveal, but not in the Mingle", () => {
     expect(apply(started(4, 2), { type: "buyPoints", guest: "g1", favours: 1 }, 5)).toEqual({ ok: false, reason: "no Dance is running" });
     const revealing = tickToDeadline(inDance());
     expect(revealing.match!.stage).toBe("reveal");
-    expect(apply(revealing, { type: "buyPoints", guest: "g1", favours: 1 }, MINGLE_MS + 15_100).ok).toBe(true);
+    expect(apply(revealing, { type: "buyPoints", guest: "g1", favours: 1 }, T0 + 15_100).ok).toBe(true);
   });
 
   it("can win a ranking place, and floors the payout at 0", () => {
     let s = intoDance(started(4, 2));
-    s = must(s, { type: "buyPoints", guest: "g3", favours: 10 }, MINGLE_MS);
+    s = must(s, { type: "buyPoints", guest: "g3", favours: 10 }, T0);
     s = playDance(s, () => null);
     expect(s.danceResult!.ranking[0]!.guest).toBe("g3");
     expect(s.guests.find((g) => g.id === "g3")!.favours).toBe(2); // 10 spent, +2 paid

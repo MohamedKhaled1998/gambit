@@ -22,8 +22,14 @@ export function tickToDeadline(s: GameState): GameState {
   return must(s, { type: "tick" }, d);
 }
 
-/** Moves to the start of the Dance. */
-export const intoDance = (s: GameState): GameState => tickToDeadline(s);
+/** Runs the Dance slot's Narrator line and Prelude out until the match is under way. */
+export function intoMatch(s: GameState): GameState {
+  while (s.phase === "dance" && !s.match && !s.auction && !s.bluff) s = tickToDeadline(s);
+  return s;
+}
+
+/** Moves to the first step of the Dance, past the Narrator's line and the Prelude. */
+export const intoDance = (s: GameState): GameState => intoMatch(tickToDeadline(s));
 
 /** What a guest does at a step: the position to tap and how long they take, or null for no answer. */
 export type Player = (guest: GuestId, step: StepView, rightPosition: number) => { position: number; ms: number } | null;
@@ -62,6 +68,7 @@ const players = (s: GameState) => here(s, Object.keys((s.phase === "dance" ? s.m
 
 /** Plays the running match (Dance or Cellar game) to its end with scripted guests. */
 export function playMatch(s: GameState, play: Player): GameState {
+  s = intoMatch(s);
   const phase = s.phase;
   if (phase === "dance" && s.bluff) return playBluff(s);
   if (phase === "dance" && s.auction) return playAuction(s);

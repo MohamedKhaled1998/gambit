@@ -4,7 +4,6 @@ import {
   BALLOT_REVEAL_MS,
   DELETE_AFTER_MS,
   JURY_VOTE_MS,
-  LAST_DANCE_INTRO_MS,
   LAST_DANCE_PREDICTION_POINTS,
   QUESTIONS_MS,
   type DrawnRecord,
@@ -17,6 +16,7 @@ import {
 } from "../shared/types";
 import { startAlong } from "./along";
 import { drawInt, shuffle } from "./random";
+import { narrate, openPrelude } from "./prelude";
 import { advanceRace, rankRace, startRace, stepView } from "./race";
 
 /** The Last Dance: the finalists' Race match, the addresses, the Jury vote and its reveal. Pure; `game.ts` calls in. */
@@ -70,7 +70,28 @@ export function openLastDance(s: GameState, at: number): GameState {
     lastMask: null,
     endedAt: null,
   };
-  return { ...s, seed: drawn.seed, drawn: [...s.drawn, { round: s.rounds + 1, role: "cellar", id: drawn.match.id }], phase: "lastDance", along: null, lastDance, deadline: at + LAST_DANCE_INTRO_MS };
+  const next: GameState = { ...s, seed: drawn.seed, drawn: [...s.drawn, { round: s.rounds + 1, role: "cellar", id: drawn.match.id }], phase: "lastDance", along: null, lastDance, deadline: at };
+  // The Narrator's line, then the match's Prelude (an Encore has none); the match starts when it is over.
+  const line = narrate(next, "lastDance", at);
+  next.prelude = openPrelude("lastDance", lastDance.def, lastDance.encore, at + line);
+  next.deadline = next.prelude?.endsAt ?? at + line;
+  return next;
+}
+
+/** The guests playing the Last Dance's match: its finalists. */
+export const lastDancePlayers = (s: GameState): GuestId[] => [...s.lastDance!.finalists];
+
+/** The Last Dance's match starts at `at`: when the Prelude is over, or the finalists have both skipped. */
+export function startLastDanceMatch(s: GameState, at: number): void {
+  const ld = s.lastDance!;
+  const before = s.seed;
+  const [race, seed] = startRace(s.seed, ld.def, ld.finalists, at, ld.def.steps.cellar!);
+  s.seed = seed;
+  ld.race = race;
+  s.along = startAlong(ld.def, "cellar", unmasked(s), before, at);
+  ld.stage = "match";
+  s.prelude = null;
+  s.deadline = race.deadline;
 }
 
 /** Moves the Last Dance on at its deadline `at`; `present` is who is connected (everyone when unknown). */
@@ -78,16 +99,9 @@ export function advanceLastDance(s: GameState, at: number, present: GuestId[] | 
   const ld = s.lastDance!;
   const presentJurors = () => unmasked(s).filter((g) => !present || present.includes(g));
   switch (ld.stage) {
-    case "intro": {
-      const before = s.seed;
-      const [race, seed] = startRace(s.seed, ld.def, ld.finalists, at, ld.def.steps.cellar!);
-      s.seed = seed;
-      ld.race = race;
-      s.along = startAlong(ld.def, "cellar", unmasked(s), before, at);
-      ld.stage = "match";
-      s.deadline = race.deadline;
+    case "intro":
+      startLastDanceMatch(s, at);
       return;
-    }
     case "match": {
       if (advanceRace(ld.race!, at)) {
         s.deadline = ld.race!.deadline;

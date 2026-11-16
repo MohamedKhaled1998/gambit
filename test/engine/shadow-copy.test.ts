@@ -9,7 +9,7 @@ vi.mock("../../src/content/library", async () => {
 });
 import { apply, viewFor } from "../../src/engine/game";
 import type { GameState, GuestId, GuestView } from "../../src/shared/types";
-import { mixedPlayer, must, playMatch, started, tickToDeadline } from "./sim";
+import { intoMatch, mixedPlayer, must, playMatch, started, tickToDeadline } from "./sim";
 
 type V<P extends GuestView["phase"]> = Extract<GuestView, { phase: P }>;
 const remaining = (s: GameState) => s.guests.filter((g) => g.unmaskedIn === undefined).map((g) => g.id);
@@ -18,7 +18,7 @@ const unmasked = (s: GameState) => s.guests.filter((g) => g.unmaskedIn !== undef
 function roundTwoDance(n: number, seed: number): GameState {
   let s = started(n, seed);
   while (!(s.phase === "mingle" && s.round === 2)) s = s.phase === "dance" || s.phase === "cellar" ? playMatch(s, mixedPlayer) : tickToDeadline(s);
-  return tickToDeadline(s);
+  return intoMatch(tickToDeadline(s));
 }
 
 /** A seed whose round 2 Dance is the given match. */
