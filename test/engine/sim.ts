@@ -28,12 +28,26 @@ export const intoDance = (s: GameState): GameState => tickToDeadline(s);
 /** What a guest does at a step: the position to tap and how long they take, or null for no answer. */
 export type Player = (guest: GuestId, step: StepView, rightPosition: number) => { position: number; ms: number } | null;
 
+/** A scripted bidder: a guest-dependent share of their points, different on every step. */
+const bidFor = (guest: GuestId, step: number, points: number) => Math.min(points, (Number(guest.slice(1)) * 7 + step * 3) % (points + 1));
+
+/** Plays a Sealed bid Dance to its end, every guest bidding by `bidFor`. */
+function playAuction(s: GameState): GameState {
+  while (s.phase === "dance") {
+    const a = s.auction!;
+    if (a.stage === "bid") for (const id of Object.keys(a.points)) if (s.phase === "dance" && s.auction!.stage === "bid") s = must(s, { type: "bid", guest: id, amount: bidFor(id, a.step, s.auction!.points[id]!) }, a.stepStartedAt + 1000);
+    s = tickToDeadline(s);
+  }
+  return s;
+}
+
 /** The guests playing the running match: everyone in a Dance, the Cellar in a Cellar game. */
 const players = (s: GameState) => Object.keys((s.phase === "dance" ? s.match! : s.cellar!.race!).points);
 
 /** Plays the running match (Dance or Cellar game) to its end with scripted guests. */
 export function playMatch(s: GameState, play: Player): GameState {
   const phase = s.phase;
+  if (phase === "dance" && s.auction) return playAuction(s);
   while (s.phase === phase) {
     const race = phase === "dance" ? s.match! : s.cellar!.race!;
     if (race.stage === "answer") {

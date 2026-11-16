@@ -19,6 +19,15 @@ export interface LeakCase {
 }
 
 export const CASES: LeakCase[] = [
+  {
+    name: "a bid before the reveal",
+    phases: ["dance"],
+    setState: (s, id, v) => {
+      const a = s.auction;
+      if (!a || a.stage !== "bid" || !(id in a.points)) return s;
+      return { ...s, auction: { ...a, bids: { ...a.bids, [id]: { amount: Math.abs(v) % 51, order: Math.abs(v) % 7 } } } };
+    },
+  },
   { name: "joinedAt", set: (g, v) => ({ ...g, joinedAt: v }) },
   // Favours are private until guests are sent down.
   { name: "favours", phases: ["mingle", "dance", "cellar"], set: (g, v) => ({ ...g, favours: Math.abs(v) % 40 }) },
@@ -54,8 +63,8 @@ export const CASES: LeakCase[] = [
 
 /** Changes the running match (the Dance or the Cellar game) when the guest plays in it. */
 function onRace(s: GameState, id: GuestId, change: (m: RaceState) => RaceState): GameState {
-  const race = s.phase === "cellar" ? s.cellar!.race! : s.match!;
-  if (!(id in race.points)) return s;
+  const race = s.phase === "cellar" ? s.cellar!.race : s.match;
+  if (!race || !(id in race.points)) return s;
   const next = change(race);
   return s.phase === "cellar" ? { ...s, cellar: { ...s.cellar!, race: next } } : { ...s, match: next };
 }
@@ -76,8 +85,8 @@ function arbState(): fc.Arbitrary<GameState> {
           s = (apply(s, { type: "tick" }, s.deadline!) as { state: GameState }).state;
           // Some guests answer, and the clock runs on a few steps.
           for (let k = 0; k < steps; k++) {
-            const m = s.match!;
-            const a = apply(s, { type: "answer", guest: `g${k % n}`, position: k % 4 }, m.stepStartedAt + 1000);
+            const m = (s.match ?? s.auction)!;
+            const a = apply(s, s.auction ? { type: "bid", guest: `g${k % n}`, amount: (k * 7) % 51 } : { type: "answer", guest: `g${k % n}`, position: k % 4 }, m.stepStartedAt + 1000);
             if (a.ok) s = a.state;
             if (k % 2) s = (apply(s, { type: "tick" }, s.deadline!) as { state: GameState }).state;
           }

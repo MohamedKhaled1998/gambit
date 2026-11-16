@@ -50,7 +50,7 @@ describe("library entry checks", () => {
         });
       }
 
-      if (m.guestRange.cellar) it("plays as a Cellar game to a strict ranking with simulated guests across its Cellar range", () => {
+      if (m.guestRange.cellar && m.type === "race") it("plays as a Cellar game to a strict ranking with simulated guests across its Cellar range", () => {
         const [lo, hi] = m.guestRange.cellar!;
         for (let n = lo; n <= hi; n++) {
           // Seat a game, send the Dance's worst n down by hand-building the Cellar game on the library's match.
@@ -65,7 +65,7 @@ describe("library entry checks", () => {
         }
       });
 
-      it("has a problem bank that covers the longest game", () => {
+      if (m.type === "race") it("has a problem bank that covers the longest game", () => {
         const longest = Math.max(m.steps.dance ?? 0, m.steps.cellar ?? 0);
         const [problems] = generateProblems(1, m, longest);
         expect(new Set(problems.map((p) => `${p.prompt}|${[...p.choices].sort().join("|")}`)).size).toBe(longest);

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MINGLE_MS, SENT_DOWN_MS, UNMASKING_MS, type ClientAction, type GuestView, type StepView, type PublicGuest, type RankingEntry } from "../shared/types";
+import { MINGLE_MS, SENT_DOWN_MS, UNMASKING_MS, type ClientAction, type GuestView, type StepView, type AuctionView, type PublicGuest, type RankingEntry } from "../shared/types";
 import { ColourStrip, MaskIcon, maskLabel } from "./mask";
 import { Talk, type TalkLink } from "./talk";
 
@@ -105,6 +105,43 @@ function StepPanel({ step, favours, buyRate, now, act }: { step: StepView; favou
   );
 }
 
+/** The bid entry and reveal screens of a Sealed bid lot. */
+function BidPanel({ auction, guests, you, favours, buyRate, now, act }: { auction: AuctionView; guests: PublicGuest[]; you: string; favours: number; buyRate: number; now: number; act: Act }) {
+  const [amount, setAmount] = useState(0);
+  const [spend, setSpend] = useState(1);
+  const r = auction.reveal;
+  const name = (id: string) => guests.find((g) => g.id === id)!.name;
+  return (
+    <>
+      <p>Lot {auction.index + 1} of {auction.total} · you hold {auction.points} points and {favours} favours</p>
+      <Candle deadline={auction.deadline} length={auction.stage === "bid" ? auction.bidDeadline - auction.startedAt : 5000} now={now} />
+      <p className="prompt">A lot worth {auction.lot} points</p>
+      {auction.stage === "bid" ? (
+        auction.yourBid === null ? (
+          <p>
+            <input type="number" min={0} max={auction.points} value={amount} onChange={(e) => setAmount(Math.max(0, Math.floor(Number(e.target.value))))} style={{ width: "5rem" }} />
+            <button disabled={amount > auction.points} onClick={() => act({ type: "bid", amount })}>Bid in secret</button>
+          </p>
+        ) : (
+          <p>You bid {auction.yourBid}. The others are still bidding.</p>
+        )
+      ) : (
+        <>
+          <ol className="ranking">
+            {r!.bids.map((b) => <li key={b.guest} className={b.guest === you ? "me" : ""}><span>{name(b.guest)}</span><span>{b.amount}</span>{b.guest === r!.winner && <span>wins</span>}</li>)}
+          </ol>
+          <p>{r!.winner ? `${name(r!.winner)} pays ${r!.price} and gains ${auction.lot}.` : "Nobody bid: the lot goes unsold."}</p>
+        </>
+      )}
+      <p>
+        Buy points ({buyRate} each):{" "}
+        <input type="number" min={1} max={favours} value={spend} onChange={(e) => setSpend(Math.max(1, Math.floor(Number(e.target.value))))} style={{ width: "4rem" }} />
+        <button disabled={favours < 1 || spend > favours} onClick={() => act({ type: "buyPoints", favours: spend })}>Spend favours</button>
+      </p>
+    </>
+  );
+}
+
 function Name({ guests, id }: { guests: PublicGuest[]; id: string }) {
   const g = guests.find((x) => x.id === id)!;
   return <>{g.unmasked ? <span className="maskless" aria-label="unmasked" /> : <MaskIcon mask={g.mask} />}<span style={{ flex: 1 }}>{g.name}</span></>;
@@ -173,7 +210,7 @@ export function Game({ view, offset, act, error, talk, cover }: { view: Exclude<
       {view.phase === "dance" && (
         <>
           <h1>{view.announcement.name}</h1>
-          {view.step ? <StepPanel step={view.step} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : <p>You are watching from the Balcony.</p>}
+          {view.auction ? <BidPanel auction={view.auction} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.step ? <StepPanel step={view.step} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : <p>You are watching from the Balcony.</p>}
           <h2>The running ranking</h2>
           <Ranking ranking={view.ranking} guests={view.guests} you={view.you} />
         </>

@@ -95,7 +95,56 @@ export interface RaceMatchDef {
     | { kind: "sums"; bands: { fromStep: number; kind: "addsub" | "mul" | "twoOps" }[] }
     | { kind: "sequences"; bands: { fromStep: number; rules: 1 | 2 }[] };
 }
-export type MatchDef = RaceMatchDef;
+/** A match on the Sealed bid match type: one lot a step goes to the highest sealed bid. Data only. */
+export interface SealedBidMatchDef {
+  id: string;
+  name: string;
+  type: "sealedBid";
+  rulesSummary: string;
+  workedExample: string;
+  guestRange: { dance: [number, number] | null; cellar: [number, number] | null };
+  /** The most steps any band plays; the longest the match runs. */
+  steps: { dance: number | null; cellar: number | null };
+  /** Every guest's points at the start. */
+  startingPoints: number;
+  /** Lots by guest count: the first band whose `upTo` reaches the guests. */
+  lotBands: { upTo: number; lots: number }[];
+  /** A lot's value runs from `lotValue[0]` to `lotValue[1]`; the values sum to about `meanValue` × lots. */
+  lotValue: [number, number];
+  meanValue: number;
+  studySeconds: number;
+  /** The bid phase. */
+  answerSeconds: number;
+  /** Bid, then the reveal. */
+  stepSeconds: number;
+  preludeSeconds: number;
+  buyRate: number;
+  tieBreak: ("points" | "lots" | "draw")[];
+  oncePerGame?: boolean;
+  masks?: boolean;
+}
+export type MatchDef = RaceMatchDef | SealedBidMatchDef;
+
+/** A Sealed bid match running: one lot a step, bids hidden until the reveal. */
+export interface AuctionState {
+  def: SealedBidMatchDef;
+  /** Public values of the lots, in the order they are sold. */
+  lots: number[];
+  step: number;
+  stage: "bid" | "reveal";
+  stepStartedAt: number;
+  bidDeadline: number;
+  /** End of the current stage. */
+  deadline: number;
+  drawKeys: Record<GuestId, number>;
+  /** This step's bids; hidden until the reveal. `order` is when each was submitted, 0 first. */
+  bids: Record<GuestId, { amount: number; order: number }>;
+  points: Record<GuestId, number>;
+  /** Lots won so far. */
+  won: Record<GuestId, number>;
+  /** The step just revealed: who won the lot and what they paid; null while bidding or when nobody bid. */
+  sale: { winner: GuestId; price: number } | null;
+}
 
 export interface Problem {
   prompt: string;
@@ -150,8 +199,10 @@ export interface RaceState {
 export interface RankingEntry {
   guest: GuestId;
   points: number;
-  /** Total answer time in ms. */
+  /** Total answer time in ms; 0 in a Sealed bid match. */
   time: number;
+  /** Lots won, in a Sealed bid match. */
+  lots?: number;
   /** True when the draw, not points or time, put this guest ahead of or behind a neighbour. */
   drawn: boolean;
 }
@@ -217,6 +268,8 @@ export interface GameState {
   danceDef: MatchDef | null;
   danceEncore: boolean;
   match: RaceState | null;
+  /** The Dance when it is on the Sealed bid match type; `match` is then null. */
+  auction: AuctionState | null;
   danceResult: DanceResult | null;
   cellar: CellarState | null;
   /** Every gift given this game. */
@@ -234,6 +287,7 @@ export type Action =
   | { type: "removeGuest"; guest: GuestId; target: GuestId }
   | { type: "start"; guest: GuestId }
   | { type: "answer"; guest: GuestId; position: number }
+  | { type: "bid"; guest: GuestId; amount: number }
   | { type: "buyPoints"; guest: GuestId; favours: number }
   | { type: "gift"; guest: GuestId; to: GuestId; favours: number }
   | { type: "openRoom"; guest: GuestId; members: GuestId[] }
@@ -256,6 +310,9 @@ export type Rejection =
   | "too late"
   | "wait for the answer phase"
   | "already answered"
+  | "already bid"
+  | "no auction is running"
+  | "bids are whole points up to what you hold"
   | "no such choice"
   | "not enough favours"
   | "gifts are given in the Mingle only"
@@ -304,6 +361,24 @@ export interface StepView {
   reveal: { correct: number; yourResult: "right" | "wrong" | "none" } | null;
 }
 
+/** A Sealed bid step as one guest sees it. */
+export interface AuctionView {
+  index: number;
+  total: number;
+  stage: "bid" | "reveal";
+  startedAt: number;
+  bidDeadline: number;
+  deadline: number;
+  /** The lot's public value. */
+  lot: number;
+  /** Your own live points: the most you can bid. */
+  points: number;
+  /** Your own bid, if made; never anyone else's before the reveal. */
+  yourBid: number | null;
+  /** Only once the lot is revealed: every bid with names, highest first (the first submitted ahead on equal bids). */
+  reveal: { bids: { guest: GuestId; amount: number }[]; winner: GuestId | null; price: number } | null;
+}
+
 export interface Announcement {
   name: string;
   /** Drawn a second time this game: fresh problems, no Prelude. */
@@ -344,8 +419,10 @@ export type GuestView =
       favours: number;
       announcement: Announcement;
       buyRate: number;
-      /** Null for a guest who isn't playing (unmasked). */
+      /** Null for a guest who isn't playing (unmasked), and in a Sealed bid match. */
       step: StepView | null;
+      /** The Sealed bid step; null in other matches and for a guest who isn't playing. */
+      auction: AuctionView | null;
       /** Public running ranking; bought points show at once. */
       ranking: RankingEntry[];
     })
@@ -432,12 +509,13 @@ export type ClientAction =
   | { type: "removeGuest"; target: GuestId }
   | { type: "start" }
   | { type: "answer"; position: number }
+  | { type: "bid"; amount: number }
   | { type: "buyPoints"; favours: number }
   | { type: "gift"; to: GuestId; favours: number }
   | { type: "openRoom"; members: GuestId[] }
   | { type: "leaveRoom"; room: string };
 
-const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "buyPoints", "gift", "openRoom", "leaveRoom"] satisfies ClientAction["type"][];
+const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "bid", "buyPoints", "gift", "openRoom", "leaveRoom"] satisfies ClientAction["type"][];
 
 /** True only for the actions a client may send; never `tick`, which only the alarm sends. */
 export function isClientAction(value: unknown): value is ClientAction {
