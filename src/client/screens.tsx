@@ -186,6 +186,59 @@ function ToastPanel({ bluff, guests, you, favours, buyRate, now, act }: { bluff:
   );
 }
 
+const STAGE_TITLES: Record<string, string> = { intro: "The Last Dance", match: "The Last Dance", winnerFloor: "The addresses", loserFloor: "The addresses", questions: "Questions", vote: "The Jury votes", reveal: "The ballots", ended: "The last mask", deleted: "The last mask" };
+
+/** The Last Dance: the match, the addresses on the Table, the Jury vote, the reveal and the end screen. */
+function LastDance({ view, now, act }: { view: Extract<GuestView, { phase: "lastDance" }>; now: number; act: Act }) {
+  const name = (id: string) => view.guests.find((g) => g.id === id)?.name ?? "?";
+  const r = view.result;
+  const over = view.stage === "ended" || view.stage === "deleted";
+  const juror = view.guests.find((g) => g.id === view.you)!.unmasked;
+  return (
+    <>
+      <h1>{STAGE_TITLES[view.stage]}</h1>
+      {view.deadline !== null && <Candle deadline={view.deadline} length={Math.max(1, view.deadline - now)} now={now} />}
+      <p>The last two: {view.finalists.map(name).join(" and ")}.</p>
+      {view.stage === "intro" && (
+        <>
+          <h2>{view.announcement.name}{view.announcement.encore ? " (an Encore)" : ""}</h2>
+          <p>{view.announcement.rulesSummary}</p>
+          <p><em>{view.announcement.workedExample}</em></p>
+          {view.announcement.masks && <ColourStrip />}
+        </>
+      )}
+      {view.stage === "match" && (
+        <>
+          {view.step ? <StepPanel step={view.step} favours={view.yourFavours} buyRate={view.buyRate} now={now} act={act} /> : <p>The last two play; you are watching.</p>}
+          <Ranking ranking={view.ranking} guests={view.guests} you={view.you} />
+        </>
+      )}
+      {r && (
+        <p>
+          {name(r.winner)} won the match.{" "}
+          {r.jurors === 0 ? "No juror is here, so the match decides." : `${name(r.loser)} needs ${r.needs} of ${r.jurors} votes.`}
+        </p>
+      )}
+      {(view.stage === "winnerFloor" || view.stage === "loserFloor") && <p>{view.floor === view.you ? "You have the floor on the Table." : `${name(view.floor as string)} has the floor on the Table.`}</p>}
+      {view.stage === "questions" && <p>The Table is open to everyone: open questions.</p>}
+      {view.stage === "vote" && juror && view.vote && (
+        view.vote.yourVote ? <p>You voted for {name(view.vote.yourVote)}.</p> : (
+          <p>{view.finalists.map((id) => <button key={id} onClick={() => act({ type: "vote", finalist: id })}>Vote for {name(id)}</button>)}</p>
+        )
+      )}
+      {view.stage === "vote" && !(juror && view.vote) && <p>The Jury is voting in secret.</p>}
+      {view.ballots.length > 0 && <ul>{view.ballots.map((b) => <li key={b.juror}>{name(b.juror)} voted for {name(b.finalist)}</li>)}</ul>}
+      {over && view.lastMask && (
+        <>
+          <h2>{name(view.lastMask)} is the last mask</h2>
+          {view.favours && <><h3>Final favours</h3><FavourList view={view} favours={view.favours} /></>}
+          {view.reveal && <PredictionReveal reveal={view.reveal} guests={view.guests} />}
+        </>
+      )}
+    </>
+  );
+}
+
 function Name({ guests, id }: { guests: PublicGuest[]; id: string }) {
   const g = guests.find((x) => x.id === id)!;
   return <>{g.unmasked ? <span className="maskless" aria-label="unmasked" /> : <MaskIcon mask={g.mask} />}<span style={{ flex: 1 }}>{g.name}</span></>;
@@ -268,7 +321,7 @@ function PredictionPanel({ predictions, guests, you, act }: { predictions: Predi
       <h3>Predictions</h3>
       {open && (
         <>
-          <p>Who will the Cellar game unmask? Pick {open.picks}, until it starts.</p>
+          <p>{open.kind === "lastDance" ? "Who will win the Last Dance's match? Pick one, until it starts." : `Who will the Cellar game unmask? Pick ${open.picks}, until it starts.`}</p>
           <ul>
             {open.cellar.map((id) => (
               <li key={id}>
@@ -287,6 +340,7 @@ function PredictionPanel({ predictions, guests, you, act }: { predictions: Predi
           </li>
         ))}
       </ul>
+      {predictions.lastDance && <p>Last Dance match: {Object.entries(predictions.lastDance.picks).map(([g, p]) => `${name(g)} picked ${name(p)}`).join("; ") || "no picks"}</p>}
       <p>Points: {Object.entries(predictions.scores).map(([g, n]) => `${g === you ? "you" : name(g)} ${n}`).join(", ")}</p>
     </>
   );
@@ -304,6 +358,7 @@ function PredictionReveal({ reveal, guests }: { reveal: PredictionsReveal; guest
           </li>
         ))}
       </ul>
+      {reveal.lastDance && <p>The Last Dance's match: {Object.entries(reveal.lastDance.picks).map(([g, p]) => `${name(g)} picked ${name(p)}`).join("; ") || "no picks"}.</p>}
       <p>{reveal.oracle.length ? `The Oracle: ${reveal.oracle.map(name).join(" and ")} (${reveal.scores[reveal.oracle[0]!]} points).` : "No Oracle tonight: no prediction came true."}</p>
     </>
   );
@@ -379,14 +434,7 @@ export function Game({ view, offset, act, error, talk, cover }: { view: Exclude<
           <FavourList view={view} favours={view.favours} />
         </>
       )}
-      {view.phase === "lastDance" && (
-        <>
-          <h1>The Last Dance</h1>
-          <p>The last two guests remain:</p>
-          <ul>{view.finalists.map((id) => <li key={id}><Name guests={view.guests} id={id} /></li>)}</ul>
-          <PredictionReveal reveal={view.reveal} guests={view.guests} />
-        </>
-      )}
+      {view.phase === "lastDance" && <LastDance view={view} now={now} act={act} />}
       <Balcony view={view} now={now} act={act} />
       {error && <p className="error">{error}</p>}
     </main>

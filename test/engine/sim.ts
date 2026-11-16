@@ -96,3 +96,26 @@ export const mixedPlayer: Player = (guest, step, right) => {
   const i = Number(guest.slice(1));
   return step.index % (i + 1) === 0 ? { position: right, ms: 4000 } : { position: (right + 1) % 4, ms: 4000 };
 };
+
+/** Plays the Last Dance's match to its end, each finalist answering as `play` says. */
+export function playLastDanceMatch(s: GameState, play: Player): GameState {
+  while (s.phase === "lastDance" && s.lastDance!.stage === "intro") s = tickToDeadline(s);
+  while (s.lastDance!.stage === "match") {
+    const race = s.lastDance!.race!;
+    if (race.stage === "answer")
+      for (const id of s.lastDance!.finalists) {
+        const step = (viewFor(s, id) as { step: StepView }).step;
+        const move = play(id, step, race.layouts[id]![race.step]!.indexOf(0));
+        if (move && s.lastDance!.stage === "match" && s.lastDance!.race!.stage === "answer") s = must(s, { type: "answer", guest: id, position: move.position }, race.answerStartedAt + move.ms);
+      }
+    s = tickToDeadline(s);
+  }
+  return s;
+}
+
+/** Plays the Last Dance from its start to the end screen, every finalist as `play` says and no juror voting. */
+export function playToEnd(s: GameState, play: Player): GameState {
+  s = playLastDanceMatch(s, play);
+  while (s.lastDance!.stage !== "ended") s = tickToDeadline(s);
+  return s;
+}

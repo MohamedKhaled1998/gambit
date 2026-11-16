@@ -8,7 +8,7 @@ vi.mock("../../src/content/library", async () => {
 });
 import { apply, chatAccess, nextDeadline, viewFor } from "../../src/engine/game";
 import type { GameState, GuestId, GuestView, RaceState } from "../../src/shared/types";
-import { mixedPlayer, must, playGame, playMatch, started, tickToDeadline } from "./sim";
+import { mixedPlayer, must, playGame, playMatch, playToEnd, started, tickToDeadline } from "./sim";
 
 type V<P extends GuestView["phase"]> = Extract<GuestView, { phase: P }>;
 const remaining = (s: GameState) => s.guests.filter((g) => g.unmaskedIn === undefined).map((g) => g.id);
@@ -158,7 +158,7 @@ describe("predicting who a Cellar game unmasks", () => {
     const s = roundTwoSentDown(7);
     const [a] = unmasked(s) as [GuestId];
     const v = viewFor(s, a) as V<"sentDown">;
-    expect(v.predictions!.open).toEqual({ cellar: s.cellar!.guests, picks: s.cellar!.unmaskings });
+    expect(v.predictions!.open).toEqual({ kind: "cellar", cellar: s.cellar!.guests, picks: s.cellar!.unmaskings });
     expect(viewFor(s, remaining(s)[0]!)!.predictions).toBeNull();
   });
 
@@ -227,7 +227,7 @@ describe("the end screen", () => {
         }
       s = s.phase === "dance" || s.phase === "cellar" ? playMatch(s, mixedPlayer) : tickToDeadline(s);
     }
-    return s;
+    return playToEnd(s, mixedPlayer);
   }
   /** Every guest of the Cellar not unmasked, then those unmasked, k of them. */
   const wrong = (cellar: GuestId[], k: number, truth: GuestId[]) => [...cellar.filter((g) => !truth.includes(g)), ...truth].slice(0, k);
@@ -235,23 +235,23 @@ describe("the end screen", () => {
   it("reveals every prediction to everyone and names the Oracle", () => {
     const end = playPicking(8, 5, (cellar, k, who, truth) => (who === 0 ? truth : wrong(cellar, k, truth)));
     const v = viewFor(end, remaining(end)[0]!) as V<"lastDance">;
-    expect(v.reveal.rounds).toHaveLength(3);
-    expect(v.reveal.oracle).toEqual([unmasked(end).find((g) => v.reveal.scores[g] === Math.max(...Object.values(v.reveal.scores)))]);
-    expect(v.reveal.scores[v.reveal.oracle[0]!]).toBeGreaterThan(0);
-    expect(v.reveal.rounds[1]!.picks).not.toEqual({});
+    expect(v.reveal!.rounds).toHaveLength(3);
+    expect(v.reveal!.oracle).toEqual([unmasked(end).find((g) => v.reveal!.scores[g] === Math.max(...Object.values(v.reveal!.scores)))]);
+    expect(v.reveal!.scores[v.reveal!.oracle[0]!]).toBeGreaterThan(0);
+    expect(v.reveal!.rounds[1]!.picks).not.toEqual({});
     expect(v.predictions).toBeNull();
   });
 
   it("shares the Oracle title on a tie", () => {
     const end = playPicking(8, 5, (_c, _k, _w, truth) => truth);
     const v = viewFor(end, remaining(end)[0]!) as V<"lastDance">;
-    const best = Math.max(...Object.values(v.reveal.scores));
-    expect(v.reveal.oracle.length).toBeGreaterThan(1);
-    for (const g of v.reveal.oracle) expect(v.reveal.scores[g]).toBe(best);
+    const best = Math.max(...Object.values(v.reveal!.scores));
+    expect(v.reveal!.oracle.length).toBeGreaterThan(1);
+    for (const g of v.reveal!.oracle) expect(v.reveal!.scores[g]).toBe(best);
   });
 
   it("names no Oracle when nobody scored", () => {
     const end = playPicking(8, 5, () => []);
-    expect((viewFor(end, "g0") as V<"lastDance">).reveal.oracle).toEqual([]);
+    expect((viewFor(end, "g0") as V<"lastDance">).reveal!.oracle).toEqual([]);
   });
 });

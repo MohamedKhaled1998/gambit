@@ -46,6 +46,19 @@ export const DANCE_MS = 5 * 60_000;
 export const SENT_DOWN_MS = 60_000;
 export const CELLAR_MS = 3 * 60_000;
 export const UNMASKING_MS = 60_000;
+/** The Last Dance: the Narrator's line and the Prelude, before its match. */
+export const LAST_DANCE_INTRO_MS = 65_000;
+/** An address: the match winner's floor, then the loser's. */
+export const ADDRESS_MS = 60_000;
+/** Open questions after both addresses. */
+export const QUESTIONS_MS = 90_000;
+export const JURY_VOTE_MS = 45_000;
+/** The reveal shows one ballot every this long, then crowns the last mask. */
+export const BALLOT_REVEAL_MS = 2_000;
+/** A finished game deletes its storage this long after the end. */
+export const DELETE_AFTER_MS = 30 * 24 * 60 * 60_000;
+/** Points a correct prediction of the Last Dance's match winner scores. */
+export const LAST_DANCE_PREDICTION_POINTS = 3;
 /** A quick game's rounds, before the Last Dance. */
 export const QUICK_ROUNDS = 3;
 
@@ -322,6 +335,35 @@ export interface PredictionRound {
   unmasked: GuestId[] | null;
 }
 
+export type LastDanceStage = "intro" | "match" | "winnerFloor" | "loserFloor" | "questions" | "vote" | "reveal" | "ended" | "deleted";
+
+/** The Last Dance: the finalists' match, the addresses, the Jury vote and its reveal. */
+export interface LastDanceState {
+  stage: LastDanceStage;
+  /** The Race match, played head to head at its Cellar game length. */
+  def: RaceMatchDef;
+  encore: boolean;
+  finalists: GuestId[];
+  /** Set when the match starts. */
+  race: RaceState | null;
+  /** Unmasked guests' picks of the match winner; open during the intro. Hidden from remaining guests until the end. */
+  picks: Record<GuestId, GuestId>;
+  matchWinner: GuestId | null;
+  matchLoser: GuestId | null;
+  /** The jurors present: counted when the match ends for the bar shown, and again when the vote opens, which decides. */
+  jurors: GuestId[];
+  /** The Jury's ballots by juror, naming a finalist; secret until the reveal. */
+  ballots: Record<GuestId, GuestId>;
+  /** The cast ballots' jurors in the order the reveal shows them, drawn from the seed. */
+  order: GuestId[];
+  /** How many ballots the reveal has shown. */
+  shown: number;
+  /** The finalist who won the Last Dance; set when the vote closes, shown at the end. */
+  lastMask: GuestId | null;
+  /** When the game ended; its storage is deleted `DELETE_AFTER_MS` later. */
+  endedAt: number | null;
+}
+
 export interface GameState {
   phase: "foyer" | "mingle" | "dance" | "sentDown" | "cellar" | "unmasking" | "lastDance";
   format: Format;
@@ -358,6 +400,8 @@ export interface GameState {
   along: Along | null;
   /** Every Cellar game's predictions that has had a count to unmask. */
   predictions: PredictionRound[];
+  /** The Last Dance, from the last unmasking on; null before. */
+  lastDance: LastDanceState | null;
 }
 
 export type Action =
@@ -373,7 +417,9 @@ export type Action =
   | { type: "openRoom"; guest: GuestId; members: GuestId[] }
   | { type: "leaveRoom"; guest: GuestId; room: string }
   | { type: "predict"; guest: GuestId; picks: GuestId[] }
-  | { type: "tick" };
+  | { type: "vote"; guest: GuestId; finalist: GuestId }
+  /** `present` is who is connected, which only the server knows; left out, every guest counts as present. */
+  | { type: "tick"; present?: GuestId[] };
 
 export type Rejection =
   | "doors are closed"
@@ -412,7 +458,12 @@ export type Rejection =
   | "not in that Room"
   | "only unmasked guests predict"
   | "predictions are closed"
-  | "pick one guest for each unmasking";
+  | "pick one guest for each unmasking"
+  | "no Jury vote is open"
+  | "only the Jury votes"
+  | "the Jury was counted when the vote opened"
+  | "name a finalist"
+  | "already voted";
 
 export type ApplyResult = { ok: true; state: GameState } | { ok: false; reason: Rejection };
 
@@ -528,11 +579,20 @@ export interface AlongView {
   done: boolean;
 }
 
+/** Picks of who wins the Last Dance's match; `winner` is null until the match ends. */
+export interface LastDancePredictions {
+  finalists: GuestId[];
+  picks: Record<GuestId, GuestId>;
+  winner: GuestId | null;
+}
+
 /** The predictions as the Balcony sees them. */
 export interface PredictionsView {
-  /** The guests this round's Cellar game could unmask, and how many picks to make, while picks are open; else null. */
-  open: { cellar: GuestId[]; picks: number } | null;
+  /** The guests this round's Cellar game could unmask (or the finalists, for the Last Dance's match), and how many picks to make, while picks are open; else null. */
+  open: { kind: "cellar" | "lastDance"; cellar: GuestId[]; picks: number } | null;
   rounds: PredictionRound[];
+  /** The Last Dance's match winner picks; null before the Last Dance. */
+  lastDance: LastDancePredictions | null;
   /** Points so far: one per correct pick, by unmasked guest. */
   scores: Record<GuestId, number>;
 }
@@ -540,6 +600,7 @@ export interface PredictionsView {
 /** The predictions revealed to everyone at the end. */
 export interface PredictionsReveal {
   rounds: PredictionRound[];
+  lastDance: LastDancePredictions | null;
   scores: Record<GuestId, number>;
   /** The unmasked guests whose predictions scored best; ties share the title. Empty when nobody scored. */
   oracle: GuestId[];
@@ -613,11 +674,33 @@ export type GuestView =
     })
   | (Seated & {
       phase: "lastDance";
-      /** Placeholder end screen: the last two. */
+      stage: LastDanceStage;
+      /** When the stage ends; null once the game is over. */
+      deadline: number | null;
       finalists: GuestId[];
-      favours: Record<GuestId, number>;
-      /** Every prediction, and the Oracle. */
-      reveal: PredictionsReveal;
+      /** The match, announced during the intro. */
+      announcement: Announcement;
+      buyRate: number;
+      /** Your own live balance; leftover favours count for nothing. */
+      yourFavours: number;
+      /** A finalist's private step during the match; null otherwise. */
+      step: StepView | null;
+      /** The match's public running ranking; empty until it starts. */
+      ranking: RankingEntry[];
+      /** Once the match has ended: who won, who lost, and the bar the loser must clear. */
+      result: { winner: GuestId; loser: GuestId; jurors: number; needs: number } | null;
+      /** During the addresses: who may post on the Table, a guest or everyone. */
+      floor: GuestId | "everyone" | null;
+      /** During the vote, a juror counted when it opened: their own ballot. Null for everyone else. */
+      vote: { yourVote: GuestId | null } | null;
+      /** The ballots the reveal has shown so far, in the order shown. */
+      ballots: { juror: GuestId; finalist: GuestId }[];
+      /** The finalist crowned at the end; null before. */
+      lastMask: GuestId | null;
+      /** At the end only: everyone's final favours. */
+      favours: Record<GuestId, number> | null;
+      /** At the end only: every prediction, and the Oracle. */
+      reveal: PredictionsReveal | null;
     });
 
 /** A chat's id: "table", "balcony", a Room's id, or a Cellar talk's id ("cellar-" and its round). */
@@ -666,9 +749,10 @@ export type ClientAction =
   | { type: "gift"; to: GuestId; favours: number }
   | { type: "openRoom"; members: GuestId[] }
   | { type: "leaveRoom"; room: string }
-  | { type: "predict"; picks: GuestId[] };
+  | { type: "predict"; picks: GuestId[] }
+  | { type: "vote"; finalist: GuestId };
 
-const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "bid", "claim", "call", "buyPoints", "gift", "openRoom", "leaveRoom", "predict"] satisfies ClientAction["type"][];
+const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "bid", "claim", "call", "buyPoints", "gift", "openRoom", "leaveRoom", "predict", "vote"] satisfies ClientAction["type"][];
 
 /** True only for the actions a client may send; never `tick`, which only the alarm sends. */
 export function isClientAction(value: unknown): value is ClientAction {

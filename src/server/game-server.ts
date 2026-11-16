@@ -1,5 +1,6 @@
 import { Server, type Connection, type ConnectionContext, type WSMessage } from "partyserver";
 import { apply, chatAccess, doorsOpen, newGame, nextDeadline, viewFor } from "../engine/game";
+import { isDeleted } from "../engine/last-dance";
 import {
   CLOSE_NO_SEAT,
   CLOSE_REMOVED,
@@ -214,10 +215,22 @@ export class Game extends Server<Cloudflare.Env> {
     const loaded = this.load();
     if (!loaded) return;
     const now = Date.now();
-    const result = apply(loaded.state, { type: "tick" }, now);
+    // Who is connected is the one thing only the server knows; the Jury is counted from it.
+    const present = [...new Set([...this.getConnections<ConnState>()].flatMap((c) => (c.state?.guest ? [c.state.guest] : [])))];
+    const result = apply(loaded.state, { type: "tick", present }, now);
     if (!result.ok) return;
+    if (isDeleted(result.state)) return this.deleteGame();
     this.sql`INSERT INTO actions (id, guest, action, at) VALUES (${crypto.randomUUID()}, ${""}, ${JSON.stringify({ type: "tick" })}, ${now})`;
     this.commit(result.state, loaded.version + 1);
+  }
+
+  /** A finished game's storage goes 30 days after the end: state, actions, messages and seats. */
+  private async deleteGame(): Promise<void> {
+    for (const c of this.getConnections()) c.close(CLOSE_NO_SEAT, "this game has been deleted");
+    await this.ctx.storage.deleteAlarm();
+    await this.ctx.storage.deleteAll();
+    // The tables are gone with it; an empty set keeps a late visitor's "no such game" an answer rather than a crash.
+    this.onStart();
   }
 
   // --- the loop: save, send views, set the alarm -------------------------

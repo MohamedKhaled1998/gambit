@@ -25,6 +25,7 @@ import {
 } from "../shared/types";
 import { advanceAlong, alongDeadline, alongView, startAlong } from "./along";
 import { drawMatch } from "./draw-match";
+import { advanceLastDance, castVote, floorOf, lastDanceView, openLastDance } from "./last-dance";
 import { predict, predictionsReveal, predictionsView } from "./predictions";
 import { drawMask } from "./masks";
 import { cellarSize, unmaskingsFor } from "./schedule";
@@ -58,6 +59,7 @@ export function newGame(seed: number): GameState {
     cellarTalks: [],
     along: null,
     predictions: [],
+    lastDance: null,
   };
 }
 
@@ -66,7 +68,7 @@ const reject = (reason: Extract<ApplyResult, { ok: false }>["reason"]): ApplyRes
 export function apply(state: GameState, action: Action, now: number): ApplyResult {
   switch (action.type) {
     case "tick":
-      return { ok: true, state: tick(state, now) };
+      return { ok: true, state: tick(state, now, action.present) };
     case "answer": {
       const found = seat(state, action.guest);
       if (typeof found === "string") return reject(found);
@@ -157,6 +159,11 @@ export function apply(state: GameState, action: Action, now: number): ApplyResul
       const why = predict(next, action.guest, action.picks);
       return why ? reject(why) : { ok: true, state: next };
     }
+    case "vote": {
+      const next = structuredClone(state);
+      const why = castVote(next, action.guest, action.finalist, now);
+      return why ? reject(why) : { ok: true, state: next };
+    }
     case "join": {
       if (state.phase !== "foyer") return reject("doors are closed");
       if (state.guests.some((g) => g.id === action.guest)) return reject("already joined");
@@ -202,6 +209,7 @@ export const remaining = (state: GameState): GuestRecord[] => state.guests.filte
 function activeRace(state: GameState): RaceState | null {
   if (state.phase === "dance") return state.match;
   if (state.phase === "cellar") return state.cellar!.race;
+  if (state.phase === "lastDance" && state.lastDance?.stage === "match") return state.lastDance.race;
   return null;
 }
 
@@ -257,7 +265,7 @@ function fitsFormat(state: GameState): boolean {
 }
 
 /** The clock: runs every phase whose deadline has passed, each at its own deadline, not at `now`. */
-function tick(state: GameState, now: number): GameState {
+function tick(state: GameState, now: number, present?: GuestId[]): GameState {
   const first = nextDeadline(state);
   if (first === null || now < first) return state;
   let s = structuredClone(state);
@@ -315,7 +323,8 @@ function tick(state: GameState, now: number): GameState {
       else unmask(s, at);
     } else if (s.phase === "unmasking") {
       s = nextRound(s, at);
-    } else s.deadline = null;
+    } else if (s.phase === "lastDance") advanceLastDance(s, at, present);
+    else s.deadline = null;
   }
   return s;
 }
@@ -382,7 +391,7 @@ function unmask(s: GameState, at: number): void {
 
 /** After the unmasking: round N+1's Mingle, or the Last Dance once the rounds are done. */
 function nextRound(s: GameState, at: number): GameState {
-  if (s.round >= s.rounds) return { ...s, phase: "lastDance", deadline: null, along: null };
+  if (s.round >= s.rounds) return openLastDance(s, at);
   const next = drawDance({ ...s, round: s.round + 1 });
   if (!next) throw new Error("the library has no Dance for the guests left");
   return openMingle(next, at);
@@ -474,7 +483,20 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
         favours: publicFavours(),
       };
     case "lastDance":
-      return { ...seated, phase: "lastDance", finalists: remaining(state).map((g) => g.id), favours: publicFavours(), reveal: predictionsReveal(state) };
+    {
+      const ld = state.lastDance!;
+      const over = ld.stage === "ended" || ld.stage === "deleted";
+      return {
+        ...seated,
+        phase: "lastDance",
+        ...lastDanceView(state, guest),
+        announcement: { name: ld.def.name, encore: ld.encore, rulesSummary: ld.def.rulesSummary, workedExample: ld.def.workedExample, masks: !!ld.def.masks },
+        buyRate: ld.def.buyRate,
+        yourFavours: me.favours,
+        favours: over ? publicFavours() : null,
+        reveal: over ? predictionsReveal(state) : null,
+      };
+    }
     case "foyer":
       return { ...seated, phase: "foyer", format: state.format, canStart: guest === state.host && fitsFormat(state), canRemove: guest === state.host };
   }
@@ -492,7 +514,9 @@ export function chatAccess(state: GameState, guest: GuestId): ChatAccess {
   const cellarGame = state.phase === "cellar";
   const down = new Set(state.cellar?.guests ?? []);
   const mixed = (members: GuestId[]) => cellarGame && members.some((m) => down.has(m)) && members.some((m) => !down.has(m));
-  const access: ChatAccess = [{ chat: "table", canPost: !unmasked && !cellarGame }];
+  // In the Last Dance's addresses only the guest with the floor posts, then everyone; unmasked guests are part of the party then.
+  const floor = state.phase === "lastDance" ? floorOf(state.lastDance) : null;
+  const access: ChatAccess = [{ chat: "table", canPost: floor !== null ? floor === "everyone" || floor === guest : !unmasked && !cellarGame }];
   for (const r of state.rooms) {
     if (r.members.includes(guest)) access.push({ chat: r.id, canPost: !mixed(r.members) });
     else if (r.unmasked?.includes(guest)) access.push({ chat: r.id, canPost: false });

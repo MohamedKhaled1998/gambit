@@ -52,7 +52,7 @@ export const CASES: LeakCase[] = [
   },
   {
     name: "an unmasked guest's play-along answer or bid",
-    phases: ["dance", "cellar"],
+    phases: ["dance", "cellar", "lastDance"],
     // The Balcony shares its ranking among the unmasked guests, so only a remaining guest must not see it.
     setState: (s, id, v, observer) => {
       const a = s.along;
@@ -68,9 +68,28 @@ export const CASES: LeakCase[] = [
     // Picks are live on the Balcony; only a remaining guest must not see them, until the end screen.
     setState: (s, id, v, observer) => {
       const last = s.predictions.at(-1);
-      if (!last || s.phase === "lastDance" || s.guests.find((g) => g.id === observer)!.unmaskedIn !== undefined) return s;
+      if (!last || over(s) || s.guests.find((g) => g.id === observer)!.unmaskedIn !== undefined) return s;
       const picks = { ...last.picks, [id]: last.cellar.slice(0, 1 + (Math.abs(v) % last.unmaskings)) };
       return { ...s, predictions: [...s.predictions.slice(0, -1), { ...last, picks }] };
+    },
+  },
+  {
+    name: "a juror's Last Dance prediction",
+    // Picks are live on the Balcony; a remaining guest sees them only on the end screen.
+    phases: ["lastDance"],
+    setState: (s, id, v, observer) => {
+      const ld = s.lastDance!;
+      if (over(s) || s.guests.find((g) => g.id === observer)!.unmaskedIn !== undefined || s.guests.find((g) => g.id === id)!.unmaskedIn === undefined) return s;
+      return { ...s, lastDance: { ...ld, picks: { ...ld.picks, [id]: ld.finalists[Math.abs(v) % 2]! } } };
+    },
+  },
+  {
+    name: "a juror's ballot before the reveal",
+    phases: ["lastDance"],
+    setState: (s, id, v) => {
+      const ld = s.lastDance!;
+      if (ld.stage !== "vote" || !ld.jurors.includes(id)) return s;
+      return { ...s, lastDance: { ...ld, ballots: { ...ld.ballots, [id]: ld.finalists[Math.abs(v) % 2]! } } };
     },
   },
   { name: "joinedAt", set: (g, v) => ({ ...g, joinedAt: v }) },
@@ -92,7 +111,7 @@ export const CASES: LeakCase[] = [
   },
   {
     name: "answer before the reveal",
-    phases: ["dance", "cellar"],
+    phases: ["dance", "cellar", "lastDance"],
     setState: (s, id, v) =>
       onRace(s, id, (m) =>
         m.stage !== "answer" ? m : { ...m, answers: { ...m.answers, [id]: { position: Math.abs(v) % 4, at: m.stepStartedAt + (Math.abs(v) % 10_000) } } },
@@ -100,24 +119,31 @@ export const CASES: LeakCase[] = [
   },
   {
     name: "choice layout",
-    phases: ["dance", "cellar"],
+    phases: ["dance", "cellar", "lastDance"],
     setState: (s, id, v) =>
       onRace(s, id, (m) => ({ ...m, layouts: { ...m.layouts, [id]: m.layouts[id]!.map((l) => (Math.abs(v) % 2 ? [...l].reverse() : l)) } })),
   },
 ];
 
+/** The game is over: predictions and ballots are public. */
+const over = (s: GameState) => s.phase === "lastDance" && (s.lastDance!.stage === "ended" || s.lastDance!.stage === "deleted");
+
 /** Changes the running match (the Dance or the Cellar game) when the guest plays in it. */
 function onRace(s: GameState, id: GuestId, change: (m: RaceState) => RaceState): GameState {
+  if (s.phase === "lastDance") {
+    const race = s.lastDance!.race;
+    return race && s.lastDance!.stage === "match" && id in race.points ? { ...s, lastDance: { ...s.lastDance!, race: change(race) } } : s;
+  }
   const race = s.phase === "cellar" ? s.cellar!.race : s.match;
   if (!race || !(id in race.points)) return s;
   const next = change(race);
   return s.phase === "cellar" ? { ...s, cellar: { ...s.cellar!, race: next } } : { ...s, match: next };
 }
 
-function arbState(): fc.Arbitrary<GameState> {
+export function arbState(): fc.Arbitrary<GameState> {
   return fc
-    .record({ seed: fc.integer(), n: fc.integer({ min: 2, max: 10 }), stage: fc.constantFrom("foyer", "mingle", "dance", "cellar", "later"), steps: fc.integer({ min: 0, max: 6 }) })
-    .map(({ seed, n, stage, steps }) => {
+    .record({ seed: fc.integer(), n: fc.integer({ min: 2, max: 10 }), stage: fc.constantFrom("foyer", "mingle", "dance", "cellar", "later", "last"), steps: fc.integer({ min: 0, max: 6 }), ticks: fc.integer({ min: 0, max: 42 }) })
+    .map(({ seed, n, stage, steps, ticks }) => {
       let s = newGame(seed);
       for (let i = 0; i < n; i++) {
         const r = apply(s, { type: "join", guest: `g${i}`, name: `G${i}` }, i);
@@ -144,6 +170,23 @@ function arbState(): fc.Arbitrary<GameState> {
               const r = apply(s, { type: "answer", guest: g.id, position: k % 4 }, a.stepStartedAt + 500);
               if (r.ok) s = r.state;
             }
+            s = (apply(s, { type: "tick" }, nextDeadline(s)!) as { state: GameState }).state;
+          }
+        }
+        if (stage === "last") {
+          // Run the game out to the Last Dance, then on through some of its stages; jurors pick and vote when they can.
+          while (s.phase !== "lastDance") s = (apply(s, { type: "tick" }, nextDeadline(s)!) as { state: GameState }).state;
+          const jurors = s.guests.filter((x) => x.unmaskedIn !== undefined).map((x) => x.id);
+          for (const j of jurors) {
+            const r = apply(s, { type: "predict", guest: j, picks: [s.lastDance!.finalists[steps % 2]!] }, 0);
+            if (r.ok) s = r.state;
+          }
+          for (let k = 0; k < ticks; k++) {
+            if (s.lastDance!.stage === "vote")
+              for (const j of jurors) {
+                const r = apply(s, { type: "vote", guest: j, finalist: s.lastDance!.finalists[(steps + k) % 2]! }, s.deadline! - 1000);
+                if (r.ok) s = r.state;
+              }
             s = (apply(s, { type: "tick" }, nextDeadline(s)!) as { state: GameState }).state;
           }
         }

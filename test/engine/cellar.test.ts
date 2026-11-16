@@ -178,7 +178,7 @@ describe("a whole quick game", () => {
       expect(counts).toEqual(TABLE[n]);
       expect(end.phase).toBe("lastDance");
       expect(remaining(end)).toHaveLength(2);
-      expect(nextDeadline(end)).toBeNull();
+      expect(nextDeadline(end)).not.toBeNull();
       const v = viewFor(end, "g0") as V<"lastDance">;
       expect(v.finalists.slice().sort()).toEqual(remaining(end).map((g) => g.id).sort());
       expect(end.guests.filter((g) => g.unmaskedIn !== undefined).every((g) => g.favours === 0)).toBe(true);

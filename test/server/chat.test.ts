@@ -187,3 +187,42 @@ describe("the Balcony over WebSockets", () => {
     await late.until(() => chatMessages(late, "balcony").length === 1);
   }, 20_000);
 });
+
+describe("a finished game", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("deletes its storage 30 days after the end, by alarm", async () => {
+    const game = await startedGame(4);
+    const host = game.guests[0]!.client;
+    host.send({ type: "post", chat: "table", body: "before the end" });
+    await host.until(() => chatMessages(host, "table").length === 1);
+    const stub = env.Game.get(env.Game.idFromName(game.code));
+    const alarm = () => runInDurableObject(stub, (_, state) => state.storage.getAlarm());
+    vi.useFakeTimers({ toFake: ["Date"] });
+    // Step the clock from alarm to alarm, as it runs; nobody answers and no juror votes.
+    for (let i = 0; i < 200 && host.lastView()?.phase !== "lastDance"; i++) {
+      vi.setSystemTime((await alarm())! + 10);
+      await runDurableObjectAlarm(stub);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    while ((host.lastView() as { stage?: string }).stage !== "ended") {
+      vi.setSystemTime((await alarm())! + 10);
+      await runDurableObjectAlarm(stub);
+      await host.until(() => host.lastView() !== undefined);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const endedAt = Date.now();
+    // The alarm waits 30 days after the end.
+    expect(await alarm()).toBeGreaterThanOrEqual(endedAt + 30 * 24 * 60 * 60_000 - 100);
+    const rows = () =>
+      runInDurableObject(stub, (_, state) =>
+        ["game", "actions", "messages", "seats"].map((t) => (state.storage.sql.exec(`SELECT count(*) AS n FROM ${t}`).one() as { n: number }).n),
+      );
+    expect((await rows()).every((n) => n > 0)).toBe(true);
+    vi.setSystemTime(endedAt + 30 * 24 * 60 * 60_000 + 10);
+    await runDurableObjectAlarm(stub);
+    expect(await rows()).toEqual([0, 0, 0, 0]);
+    expect(await alarm()).toBeNull();
+    await host.until(() => host.closed !== null);
+  }, 30_000);
+});
