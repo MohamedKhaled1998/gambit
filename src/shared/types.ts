@@ -143,6 +143,14 @@ export interface DrawnRecord {
   id: string;
 }
 
+/** Whole favours one guest gave another in a Mingle; known only to the two of them. */
+export interface Gift {
+  round: number;
+  from: GuestId;
+  to: GuestId;
+  favours: number;
+}
+
 export interface GameState {
   phase: "foyer" | "mingle" | "dance" | "sentDown" | "cellar" | "unmasking" | "lastDance";
   format: Format;
@@ -163,6 +171,10 @@ export interface GameState {
   match: RaceState | null;
   danceResult: DanceResult | null;
   cellar: CellarState | null;
+  /** Every gift given this game. */
+  gifts: Gift[];
+  /** Each remaining guest's total as the current Mingle began: the standings shown during it. */
+  mingleStandings: Record<GuestId, number>;
 }
 
 export type Action =
@@ -171,6 +183,7 @@ export type Action =
   | { type: "start"; guest: GuestId }
   | { type: "answer"; guest: GuestId; position: number }
   | { type: "buyPoints"; guest: GuestId; favours: number }
+  | { type: "gift"; guest: GuestId; to: GuestId; favours: number }
   | { type: "tick" };
 
 export type Rejection =
@@ -190,6 +203,8 @@ export type Rejection =
   | "already answered"
   | "no such choice"
   | "not enough favours"
+  | "gifts are given in the Mingle only"
+  | "can't gift yourself"
   | "bad amount";
 
 export type ApplyResult = { ok: true; state: GameState } | { ok: false; reason: Rejection };
@@ -234,7 +249,18 @@ interface Seated {
 
 export type GuestView =
   | (Seated & { phase: "foyer"; format: Format; canStart: boolean; canRemove: boolean })
-  | (Seated & { phase: "mingle"; round: number; deadline: number; favours: number; announcement: Announcement })
+  | (Seated & {
+      phase: "mingle";
+      round: number;
+      deadline: number;
+      /** Your own live balance. */
+      favours: number;
+      /** Everyone's totals as the Mingle began; gifts never move them. */
+      standings: Record<GuestId, number>;
+      /** This round's gifts you gave or received; never anyone else's. */
+      gifts: { from: GuestId; to: GuestId; favours: number }[];
+      announcement: Announcement;
+    })
   | (Seated & {
       phase: "dance";
       round: number;
@@ -308,9 +334,10 @@ export type ClientAction =
   | { type: "removeGuest"; target: GuestId }
   | { type: "start" }
   | { type: "answer"; position: number }
-  | { type: "buyPoints"; favours: number };
+  | { type: "buyPoints"; favours: number }
+  | { type: "gift"; to: GuestId; favours: number };
 
-const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "buyPoints"] satisfies ClientAction["type"][];
+const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "buyPoints", "gift"] satisfies ClientAction["type"][];
 
 /** True only for the actions a client may send; never `tick`, which only the alarm sends. */
 export function isClientAction(value: unknown): value is ClientAction {

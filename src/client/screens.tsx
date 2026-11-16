@@ -96,6 +96,38 @@ function FavourList({ view, favours }: { view: { guests: PublicGuest[] }; favour
   );
 }
 
+/** The Salon's gift screen: standings as the Mingle began, a gift form, and a visual-only note of gifts given or received. */
+function GiftScreen({ view, act }: { view: Extract<GuestView, { phase: "mingle" }>; act: Act }) {
+  const others = view.guests.filter((g) => g.id !== view.you && g.id in view.standings);
+  const [to, setTo] = useState("");
+  const [amount, setAmount] = useState(1);
+  const target = others.some((g) => g.id === to) ? to : (others[0]?.id ?? "");
+  const nameOf = (id: string) => view.guests.find((g) => g.id === id)?.name ?? "";
+  return (
+    <>
+      <h2>Standings at the start of the Mingle</h2>
+      <FavourList view={view} favours={view.standings} />
+      <h2>Give a gift</h2>
+      {view.favours < 1 ? (
+        <p>You hold no favours to give.</p>
+      ) : (
+        <p>
+          <select value={target} onChange={(e) => setTo(e.target.value)}>
+            {others.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+          </select>{" "}
+          <input type="number" min={1} max={view.favours} value={amount} onChange={(e) => setAmount(Math.max(1, Math.floor(Number(e.target.value))))} style={{ width: "4rem" }} />{" "}
+          <button disabled={!target || amount > view.favours} onClick={() => act({ type: "gift", to: target, favours: amount })}>Give favours</button>
+        </p>
+      )}
+      {view.gifts.map((g, i) => (
+        <p key={i} className="gift-cue" role="status">
+          {g.from === view.you ? `You gave ${g.favours} favours to ${nameOf(g.to)}.` : `${nameOf(g.from)} gave you ${g.favours} favours.`}
+        </p>
+      ))}
+    </>
+  );
+}
+
 export function Game({ view, offset, act, error }: { view: Exclude<GuestView, { phase: "foyer" }>; offset: number; act: Act; error: string | null }) {
   const now = useServerNow(offset);
   return (
@@ -106,6 +138,7 @@ export function Game({ view, offset, act, error }: { view: Exclude<GuestView, { 
           <h1>The Mingle</h1>
           <Candle deadline={view.deadline} length={MINGLE_MS} now={now} />
           <p>You hold <strong>{view.favours}</strong> favours.</p>
+          <GiftScreen view={view} act={act} />
           <h2>Tonight's Dance: {view.announcement.name}</h2>
           <p>{view.announcement.rulesSummary}</p>
           <p><em>{view.announcement.workedExample}</em></p>

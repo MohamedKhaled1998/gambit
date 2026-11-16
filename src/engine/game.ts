@@ -47,6 +47,8 @@ export function newGame(seed: number): GameState {
     match: null,
     danceResult: null,
     cellar: null,
+    gifts: [],
+    mingleStandings: {},
   };
 }
 
@@ -84,6 +86,22 @@ export function apply(state: GameState, action: Action, now: number): ApplyResul
       buyPoints(activeRace(next)!, action.guest, action.favours);
       return { ok: true, state: next };
     }
+    case "gift": {
+      const giver = state.guests.find((g) => g.id === action.guest);
+      if (!giver) return reject("no such guest");
+      if (state.phase !== "mingle") return reject("gifts are given in the Mingle only");
+      if (giver.unmaskedIn !== undefined) return reject("no such guest");
+      if (action.to === action.guest) return reject("can't gift yourself");
+      const receiver = remaining(state).find((g) => g.id === action.to);
+      if (!receiver) return reject("no such guest");
+      if (!Number.isInteger(action.favours) || action.favours < 1) return reject("bad amount");
+      if (action.favours > giver.favours) return reject("not enough favours");
+      const next = structuredClone(state);
+      next.guests.find((g) => g.id === action.guest)!.favours -= action.favours;
+      next.guests.find((g) => g.id === action.to)!.favours += action.favours;
+      next.gifts.push({ round: state.round, from: action.guest, to: action.to, favours: action.favours });
+      return { ok: true, state: next };
+    }
     case "join": {
       if (state.phase !== "foyer") return reject("doors are closed");
       if (state.guests.some((g) => g.id === action.guest)) return reject("already joined");
@@ -117,7 +135,7 @@ export function apply(state: GameState, action: Action, now: number): ApplyResul
       if (!fitsFormat(state)) return reject("need 4-10 guests to start");
       const dance = drawDance({ ...state, round: 1 });
       if (!dance) return reject("need 4-10 guests to start");
-      return { ok: true, state: { ...dance, phase: "mingle", round: 1, deadline: now + MINGLE_MS } };
+      return { ok: true, state: openMingle({ ...dance, round: 1 }, now) };
     }
   }
 }
@@ -250,7 +268,13 @@ function nextRound(s: GameState, at: number): GameState {
   if (s.round >= s.rounds) return { ...s, phase: "lastDance", deadline: null };
   const next = drawDance({ ...s, round: s.round + 1 });
   if (!next) throw new Error("the library has no Dance for the guests left");
-  return { ...next, phase: "mingle", deadline: at + MINGLE_MS };
+  return openMingle(next, at);
+}
+
+/** Opens the round's Mingle; its standings are the totals as they stand now. */
+function openMingle(s: GameState, at: number): GameState {
+  const mingleStandings = Object.fromEntries(remaining(s).map((g) => [g.id, g.favours]));
+  return { ...s, phase: "mingle", deadline: at + MINGLE_MS, mingleStandings };
 }
 
 /** Everything a guest may see; null for someone who has no seat. */
@@ -268,7 +292,11 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
   };
   switch (state.phase) {
     case "mingle":
-      return { ...seated, phase: "mingle", round: state.round, deadline: state.deadline!, favours: me.favours, announcement: announcement! };
+      return { ...seated, phase: "mingle", round: state.round, deadline: state.deadline!, favours: me.favours,
+        standings: { ...state.mingleStandings },
+        gifts: state.gifts.filter((x) => x.round === state.round && (x.from === guest || x.to === guest)).map(({ from, to, favours }) => ({ from, to, favours })),
+        announcement: announcement!,
+      };
     case "dance": {
       const race = state.match!;
       return {

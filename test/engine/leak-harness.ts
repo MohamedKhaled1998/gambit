@@ -13,7 +13,7 @@ export interface LeakCase {
   /** Returns the guest record with the private datum replaced by `value`. */
   set?: (guest: GuestRecord, value: number) => GuestRecord;
   /** Or changes the whole state, for private data that lives in a match. */
-  setState?: (state: GameState, guest: GuestId, value: number) => GameState;
+  setState?: (state: GameState, guest: GuestId, value: number, observer: GuestId) => GameState;
   /** Only the states in these phases are tried; all by default. */
   phases?: GameState["phase"][];
 }
@@ -22,6 +22,20 @@ export const CASES: LeakCase[] = [
   { name: "joinedAt", set: (g, v) => ({ ...g, joinedAt: v }) },
   // Favours are private until guests are sent down.
   { name: "favours", phases: ["mingle", "dance", "cellar"], set: (g, v) => ({ ...g, favours: Math.abs(v) % 40 }) },
+  {
+    name: "a gift between two other guests",
+    phases: ["mingle"],
+    setState: (s, id, v, observer) => {
+      const to = s.guests.find((g) => g.id !== id && g.id !== observer);
+      const amount = 1 + (Math.abs(v) % 10);
+      if (!to) return s;
+      return {
+        ...s,
+        gifts: [...s.gifts, { round: s.round, from: id, to: to.id, favours: amount }],
+        guests: s.guests.map((g) => (g.id === id ? { ...g, favours: g.favours - amount } : g.id === to.id ? { ...g, favours: g.favours + amount } : g)),
+      };
+    },
+  },
   {
     name: "answer before the reveal",
     phases: ["dance", "cellar"],
@@ -91,7 +105,7 @@ export function expectNoLeak(opts: { extra?: LeakCase[] } = {}): void {
         const a = state.guests[ai % state.guests.length]!;
         const b = state.guests[(ai + 1 + (bi % (state.guests.length - 1))) % state.guests.length]!;
         const changed: GameState = c.setState
-          ? c.setState(state, b.id, value)
+          ? c.setState(state, b.id, value, a.id)
           : { ...state, guests: state.guests.map((g) => (g.id === b.id ? c.set!(g, value) : g)) };
         expect(viewFor(changed, a.id), c.name).toEqual(viewFor(state, a.id));
       }),
