@@ -4,6 +4,7 @@ import { ColourStrip, MaskIcon, maskLabel } from "./mask";
 import { rejoinLink } from "./connection";
 import { Caption, PreludeSection } from "./prelude";
 import { useSound } from "./audio";
+import { isTense } from "../shared/tense";
 import { Talk, type TalkLink } from "./talk";
 
 type Act = (action: ClientAction) => void;
@@ -199,6 +200,7 @@ function LastDance({ view, now, act }: { view: Extract<GuestView, { phase: "last
   const juror = view.guests.find((g) => g.id === view.you)!.unmasked;
   return (
     <>
+      <p className="kicker">The Last Dance</p>
       <h1>{STAGE_TITLES[view.stage]}</h1>
       {view.deadline !== null && <Candle deadline={view.deadline} length={Math.max(1, view.deadline - now)} now={now} />}
       <p>The last two: {view.finalists.map(name).join(" and ")}.</p>
@@ -224,7 +226,7 @@ function LastDance({ view, now, act }: { view: Extract<GuestView, { phase: "last
       {view.stage === "questions" && <p>The Table is open to everyone: open questions.</p>}
       {view.stage === "vote" && juror && view.vote && (
         view.vote.yourVote ? <p>You voted for {name(view.vote.yourVote)}.</p> : (
-          <p>{view.finalists.map((id) => <button key={id} onClick={() => act({ type: "vote", finalist: id })}>Vote for {name(id)}</button>)}</p>
+          <p className="lit">{view.finalists.map((id) => <button key={id} onClick={() => act({ type: "vote", finalist: id })}>Vote for {name(id)}</button>)}</p>
         )
       )}
       {view.stage === "vote" && !(juror && view.vote) && <p>The Jury is voting in secret.</p>}
@@ -411,17 +413,25 @@ export function InPersonSwitch({ view, act }: { view: GuestView; act: Act }) {
   );
 }
 
+/** An unmasked guest: the mask floats up and fades, then the name is written in. */
+function Unmasked({ guests, id }: { guests: PublicGuest[]; id: string }) {
+  const g = guests.find((x) => x.id === id)!;
+  return <><MaskIcon mask={g.mask} className="float-off" /><span className="written">{g.name}</span></>;
+}
+
 export function Game({ view, offset, act, error, talk, cover, code, links }: { view: Exclude<GuestView, { phase: "foyer" }>; offset: number; act: Act; error: string | null; talk: TalkLink; cover(): void; code: string; links: Record<string, string> }) {
   const now = useServerNow(offset);
   const notice = useSound(view, now);
+  const dim = isTense(view);
   return (
-    <div className="salon">
-    <main>
+    <div className={`salon${dim ? " dim" : ""}${view.phase === "cellar" ? " plum" : ""}`}>
+    <main className="stage-main">
       {view.phase !== "lastDance" && view.phase !== "ended" && <PhaseRail phase={view.phase} />}
       <Caption narrator={view.narrator} overtureUntil={view.phase === "mingle" ? view.overtureUntil : null} now={now} />
       {notice && <p className="notice" role="status">{notice}</p>}
       {view.phase === "mingle" && (
         <>
+          <p className="kicker">The Mingle</p>
           <h1>The Mingle</h1>
           <Candle deadline={view.deadline} length={MINGLE_MS} now={now} />
           <p>You hold <strong>{view.favours}</strong> favours.</p>
@@ -432,6 +442,7 @@ export function Game({ view, offset, act, error, talk, cover, code, links }: { v
       )}
       {view.phase === "dance" && (
         <>
+          <p className="kicker">The Dance</p>
           <h1>{view.announcement.name}</h1>
           <Teaching announcement={view.announcement} view={view} now={now} act={act} />
           {view.bluff ? <ToastPanel bluff={view.bluff} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.auction ? <BidPanel auction={view.auction} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.step ? <StepPanel step={view.step} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.prelude ? null : <p>You are watching from the Balcony.</p>}
@@ -441,6 +452,7 @@ export function Game({ view, offset, act, error, talk, cover, code, links }: { v
       )}
       {view.phase === "sentDown" && (
         <>
+          <p className="kicker">Sent down</p>
           <h1>Sent <em>down</em></h1>
           <Candle deadline={view.deadline} length={SENT_DOWN_MS} now={now} />
           <h2>The Dance</h2>
@@ -458,7 +470,7 @@ export function Game({ view, offset, act, error, talk, cover, code, links }: { v
           <h2>Favours</h2>
           <FavourList view={view} favours={view.favours} />
           <h2>Sent down to the Cellar</h2>
-          <ul>{view.cellar.map((id) => <li key={id} className={id === view.you ? "me" : ""}><Name guests={view.guests} id={id} /></li>)}</ul>
+          <ul>{view.cellar.map((id) => <li key={id} className={id === view.you ? "me lit" : "lit"}><Name guests={view.guests} id={id} /></li>)}</ul>
           <p>{view.unmaskings === 0 ? "A warm-up round: nobody is unmasked tonight." : `The Cellar game unmasks ${view.unmaskings}.`}</p>
           <h2>The Cellar game: {view.cellarGame.name}{view.cellarGame.encore ? " (an Encore)" : ""}</h2>
           <Teaching announcement={view.cellarGame} view={view} now={now} act={act} />
@@ -466,6 +478,7 @@ export function Game({ view, offset, act, error, talk, cover, code, links }: { v
       )}
       {view.phase === "cellar" && (
         <>
+          <p className="kicker">The Cellar</p>
           <h1>{view.announcement.name}</h1>
           <p>{view.unmaskings === 0 ? "Played for practice: nobody is unmasked." : `The lowest ${view.unmaskings} will be unmasked.`}</p>
           {view.step ? <StepPanel step={view.step} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : <p>The Cellar plays; you are watching.</p>}
@@ -475,9 +488,10 @@ export function Game({ view, offset, act, error, talk, cover, code, links }: { v
       )}
       {view.phase === "unmasking" && (
         <>
+          <p className="kicker">The unmasking</p>
           <h1>Unmasked</h1>
           <Candle deadline={view.deadline} length={UNMASKING_MS} now={now} />
-          {view.unmasked.length === 0 ? <p>Nobody is unmasked this round.</p> : <ul>{view.unmasked.map((id) => <li key={id} className="unmasked"><Name guests={view.guests} id={id} /></li>)}</ul>}
+          {view.unmasked.length === 0 ? <p>Nobody is unmasked this round.</p> : <ul>{view.unmasked.map((id) => <li key={id} className="unmasked lit"><Unmasked guests={view.guests} id={id} /></li>)}</ul>}
           <h2>Favours</h2>
           <FavourList view={view} favours={view.favours} />
         </>
@@ -485,6 +499,7 @@ export function Game({ view, offset, act, error, talk, cover, code, links }: { v
       {view.phase === "lastDance" && <LastDance view={view} now={now} act={act} />}
       {view.phase === "ended" && (
         <>
+          <p className="kicker">The last curtain</p>
           <h1>The party is over</h1>
           <p>The Host ended the game early. No last mask is crowned.</p>
           <h2>Final favours</h2>
