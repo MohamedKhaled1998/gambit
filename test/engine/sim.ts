@@ -28,22 +28,37 @@ export const intoDance = (s: GameState): GameState => tickToDeadline(s);
 /** What a guest does at a step: the position to tap and how long they take, or null for no answer. */
 export type Player = (guest: GuestId, step: StepView, rightPosition: number) => { position: number; ms: number } | null;
 
-/** Plays the Dance to the standings with scripted guests. */
-export function playDance(s: GameState, play: Player): GameState {
-  s = intoDance(s);
-  while (s.phase === "dance") {
-    const race = s.match!;
+/** The guests playing the running match: everyone in a Dance, the Cellar in a Cellar game. */
+const players = (s: GameState) => Object.keys((s.phase === "dance" ? s.match! : s.cellar!.race!).points);
+
+/** Plays the running match (Dance or Cellar game) to its end with scripted guests. */
+export function playMatch(s: GameState, play: Player): GameState {
+  const phase = s.phase;
+  while (s.phase === phase) {
+    const race = phase === "dance" ? s.match! : s.cellar!.race!;
     if (race.stage === "answer") {
-      for (const g of s.guests) {
-        const step = (viewFor(s, g.id) as { step: StepView }).step;
+      for (const id of players(s)) {
+        const step = (viewFor(s, id) as { step: StepView }).step;
         // The right position is read from the state, as a skilled guest would work it out.
-        const right = race.layouts[g.id]![race.step]!.indexOf(0);
-        const move = play(g.id, step, right);
-        if (move && s.phase === "dance" && s.match!.stage === "answer")
-          s = must(s, { type: "answer", guest: g.id, position: move.position }, race.stepStartedAt + move.ms);
+        const right = race.layouts[id]![race.step]!.indexOf(0);
+        const move = play(id, step, right);
+        const live = phase === "dance" ? s.match! : s.cellar!.race!;
+        if (move && s.phase === phase && live.stage === "answer") s = must(s, { type: "answer", guest: id, position: move.position }, race.stepStartedAt + move.ms);
       }
     }
     s = tickToDeadline(s);
+  }
+  return s;
+}
+
+/** Plays the Dance to the Sent down screen with scripted guests. */
+export const playDance = (s: GameState, play: Player): GameState => playMatch(intoDance(s), play);
+
+/** Plays every round to the Last Dance; `onPhase` sees each phase as it begins. */
+export function playGame(s: GameState, play: Player, onPhase: (s: GameState) => void = () => {}): GameState {
+  while (s.phase !== "lastDance") {
+    s = s.phase === "dance" || s.phase === "cellar" ? playMatch(s, play) : tickToDeadline(s);
+    onPhase(s);
   }
   return s;
 }

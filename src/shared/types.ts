@@ -25,13 +25,20 @@ export interface GuestRecord {
   mask: Mask;
   /** When the guest arrived; bookkeeping that is never shown to anyone. */
   joinedAt: number;
-  /** Whole favours; starts at 10, never below 0. */
+  /** Whole favours; starts at 10, never below 0, and 0 once unmasked (they vanish). */
   favours: number;
+  /** The round this guest was unmasked in; absent while they remain. */
+  unmaskedIn?: number;
 }
 
 export const START_FAVOURS = 10;
 export const MINGLE_MS = 4 * 60_000;
 export const DANCE_MS = 5 * 60_000;
+export const SENT_DOWN_MS = 60_000;
+export const CELLAR_MS = 3 * 60_000;
+export const UNMASKING_MS = 60_000;
+/** A quick game's rounds, before the Last Dance. */
+export const QUICK_ROUNDS = 3;
 
 /** Dance payout by guests remaining, 1st to last; zero-sum. */
 export const DANCE_PAYOUTS: Record<number, readonly number[]> = {
@@ -64,7 +71,11 @@ export interface RaceMatchDef {
   /** Points one favour buys. */
   buyRate: number;
   tieBreak: ("points" | "time" | "draw")[];
-  generator: { kind: "sums"; bands: { fromStep: number; kind: "addsub" | "mul" | "twoOps" }[] };
+  /** Drawn at most once a game. */
+  oncePerGame?: boolean;
+  generator:
+    | { kind: "sums"; bands: { fromStep: number; kind: "addsub" | "mul" | "twoOps" }[] }
+    | { kind: "sequences"; bands: { fromStep: number; rules: 1 | 2 }[] };
 }
 export type MatchDef = RaceMatchDef;
 
@@ -110,20 +121,48 @@ export interface DanceResult {
   payout: Record<GuestId, number>;
 }
 
+/** The guests sent down after a Dance, and the Cellar game they play. */
+export interface CellarState {
+  def: MatchDef;
+  encore: boolean;
+  /** The guests sent down, in no public order. */
+  guests: GuestId[];
+  /** How many this round's Cellar game unmasks; 0 in a warm-up round. */
+  unmaskings: number;
+  /** Set when the Cellar game starts. */
+  race: RaceState | null;
+  /** Set when the Cellar game ends. */
+  ranking: RankingEntry[] | null;
+  unmasked: GuestId[];
+}
+
+/** One match drawn this game, in draw order. */
+export interface DrawnRecord {
+  round: number;
+  role: "dance" | "cellar";
+  id: string;
+}
+
 export interface GameState {
-  phase: "foyer" | "mingle" | "dance" | "standings";
+  phase: "foyer" | "mingle" | "dance" | "sentDown" | "cellar" | "unmasking" | "lastDance";
   format: Format;
   /** Seed state for every random draw; advances as draws are made. */
   seed: number;
   host: GuestId | null;
   guests: GuestRecord[];
   round: number;
-  /** When the current phase ends; null in the Foyer and at the standings. */
+  /** Rounds in this game before the Last Dance. */
+  rounds: number;
+  /** Every match drawn so far, for the draw rule. */
+  drawn: DrawnRecord[];
+  /** When the current phase ends; null in the Foyer and at the Last Dance. */
   deadline: number | null;
   /** The round's Dance, copied from the library when the game starts. */
   danceDef: MatchDef | null;
+  danceEncore: boolean;
   match: RaceState | null;
   danceResult: DanceResult | null;
+  cellar: CellarState | null;
 }
 
 export type Action =
@@ -146,6 +185,7 @@ export type Rejection =
   | "need 4-10 guests to start"
   | "the game has started"
   | "no Dance is running"
+  | "not playing in this match"
   | "too late"
   | "already answered"
   | "no such choice"
@@ -158,6 +198,8 @@ export interface PublicGuest {
   id: GuestId;
   name: string;
   mask: Mask;
+  /** Unmasked: the mask floats off and the name is written in. */
+  unmasked: boolean;
 }
 
 export interface StepView {
@@ -178,6 +220,8 @@ export interface StepView {
 
 export interface Announcement {
   name: string;
+  /** Drawn a second time this game: fresh problems, no Prelude. */
+  encore: boolean;
   rulesSummary: string;
   workedExample: string;
 }
@@ -197,16 +241,52 @@ export type GuestView =
       favours: number;
       announcement: Announcement;
       buyRate: number;
-      step: StepView;
-      /** Public running ranking, from revealed steps only. */
+      /** Null for a guest who isn't playing (unmasked). */
+      step: StepView | null;
+      /** Public running ranking; bought points show at once. */
       ranking: RankingEntry[];
     })
   | (Seated & {
-      phase: "standings";
+      phase: "sentDown";
       round: number;
+      deadline: number;
       danceRanking: RankingEntry[];
       payout: Record<GuestId, number>;
       /** Public after the Dance. */
+      favours: Record<GuestId, number>;
+      /** The guests sent down. */
+      cellar: GuestId[];
+      /** How many the Cellar game unmasks; revealed here, never before. */
+      unmaskings: number;
+      cellarGame: Announcement;
+    })
+  | (Seated & {
+      phase: "cellar";
+      round: number;
+      deadline: number;
+      /** Your own live balance. */
+      favours: number;
+      cellar: GuestId[];
+      unmaskings: number;
+      announcement: Announcement;
+      buyRate: number;
+      /** Only for a guest in the Cellar: the private problem. Free guests watch the ranking alone. */
+      step: StepView | null;
+      ranking: RankingEntry[];
+    })
+  | (Seated & {
+      phase: "unmasking";
+      round: number;
+      deadline: number;
+      cellarRanking: RankingEntry[];
+      unmasked: GuestId[];
+      /** Remaining guests' favours, public after the Cellar game. */
+      favours: Record<GuestId, number>;
+    })
+  | (Seated & {
+      phase: "lastDance";
+      /** Placeholder end screen: the last two. */
+      finalists: GuestId[];
       favours: Record<GuestId, number>;
     });
 

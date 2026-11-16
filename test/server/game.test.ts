@@ -201,8 +201,8 @@ describe("the clock", () => {
     await runDurableObjectAlarm(env.Game.get(env.Game.idFromName(grant.code)));
     await host.until(() => host.lastView()?.phase === "dance");
     const dance = host.lastView() as Extract<GuestView, { phase: "dance" }>;
-    expect(dance.step.index).toBe(0);
-    expect(await alarmOf(grant.code)).toBe(dance.step.answerDeadline);
+    expect(dance.step!.index).toBe(0);
+    expect(await alarmOf(grant.code)).toBe(dance.step!.answerDeadline);
   });
 
   it("accepts an answer before the deadline by server time, once, and rejects one after it", async () => {
@@ -216,7 +216,7 @@ describe("the clock", () => {
     host.send({ type: "action", id: "a1", action: { type: "answer", position: 1 } });
     await host.until(() => (host.lastView() as { step?: { yourAnswer: number | null } }).step?.yourAnswer === 1);
     // Another guest's view never carries it.
-    expect((others[0]!.client.lastView() as Extract<GuestView, { phase: "dance" }>).step.yourAnswer).toBeNull();
+    expect((others[0]!.client.lastView() as Extract<GuestView, { phase: "dance" }>).step!.yourAnswer).toBeNull();
     host.send({ type: "action", id: "a2", action: { type: "answer", position: 2 } });
     await host.until(() => host.errors().includes("already answered"));
     vi.setSystemTime(mingle.deadline + 20_000);

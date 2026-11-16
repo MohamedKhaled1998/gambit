@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MINGLE_MS, type ClientAction, type GuestView, type PublicGuest, type RankingEntry } from "../shared/types";
+import { MINGLE_MS, SENT_DOWN_MS, UNMASKING_MS, type ClientAction, type GuestView, type StepView, type PublicGuest, type RankingEntry } from "../shared/types";
 import { MaskIcon } from "./mask";
 
 type Act = (action: ClientAction) => void;
@@ -14,11 +14,11 @@ function useServerNow(offset: number): number {
   return now;
 }
 
-const PHASES = ["Mingle", "Dance", "Standings"] as const;
+const PHASES = ["Mingle", "Dance", "Sent down", "Cellar", "Unmasking"] as const;
 
 /** Where the round is: a rail of its phases, the current one lit. */
-function PhaseRail({ phase }: { phase: "mingle" | "dance" | "standings" }) {
-  const current = { mingle: 0, dance: 1, standings: 2 }[phase];
+function PhaseRail({ phase }: { phase: "mingle" | "dance" | "sentDown" | "cellar" | "unmasking" }) {
+  const current = { mingle: 0, dance: 1, sentDown: 2, cellar: 3, unmasking: 4 }[phase];
   return (
     <ol className="rail">
       {PHASES.map((p, i) => (
@@ -55,12 +55,52 @@ function Ranking({ ranking, guests, you }: { ranking: RankingEntry[]; guests: Pu
   );
 }
 
-export function Game({ view, offset, act, error }: { view: Exclude<GuestView, { phase: "foyer" }>; offset: number; act: Act; error: string | null }) {
-  const now = useServerNow(offset);
+function StepPanel({ step, favours, buyRate, now, act }: { step: StepView; favours: number; buyRate: number; now: number; act: Act }) {
   const [spend, setSpend] = useState(1);
   return (
+    <>
+      <p>Step {step.index + 1} of {step.total} · you hold {favours} favours</p>
+      <Candle deadline={step.stage === "answer" ? step.answerDeadline : step.deadline} length={step.stage === "answer" ? step.answerDeadline - step.startedAt : 3000} now={now} />
+      <p className="prompt">{step.prompt}</p>
+      <div className="choices">
+        {step.choices.map((c, i) => {
+          const r = step.reveal;
+          const cls = r ? (i === r.correct ? "right" : i === step.yourAnswer ? "wrong" : "") : i === step.yourAnswer ? "picked" : "";
+          return (
+            <button key={i} className={cls} disabled={step.stage !== "answer" || step.yourAnswer !== null} onClick={() => act({ type: "answer", position: i })}>{c}</button>
+          );
+        })}
+      </div>
+      {step.reveal && <p>{{ right: "✓ Right: ten points.", wrong: "✗ Not that one.", none: "No answer: no points." }[step.reveal.yourResult]}</p>}
+      <p>
+        Buy points ({buyRate} each):{" "}
+        <input type="number" min={1} max={favours} value={spend} onChange={(e) => setSpend(Math.max(1, Math.floor(Number(e.target.value))))} style={{ width: "4rem" }} />
+        <button disabled={favours < 1 || spend > favours} onClick={() => act({ type: "buyPoints", favours: spend })}>Spend favours</button>
+      </p>
+    </>
+  );
+}
+
+function Name({ guests, id }: { guests: PublicGuest[]; id: string }) {
+  const g = guests.find((x) => x.id === id)!;
+  return <>{g.unmasked ? <span className="maskless" aria-label="unmasked" /> : <MaskIcon mask={g.mask} />}<span style={{ flex: 1 }}>{g.name}</span></>;
+}
+
+function FavourList({ view, favours }: { view: { guests: PublicGuest[] }; favours: Record<string, number> }) {
+  return (
+    <ul>
+      {view.guests.filter((g) => g.id in favours).sort((a, b) => favours[b.id]! - favours[a.id]!).map((g) => (
+        <li key={g.id}><Name guests={view.guests} id={g.id} /><strong>{favours[g.id]}</strong></li>
+      ))}
+    </ul>
+  );
+}
+
+export function Game({ view, offset, act, error }: { view: Exclude<GuestView, { phase: "foyer" }>; offset: number; act: Act; error: string | null }) {
+  const now = useServerNow(offset);
+  return (
     <main>
-      <PhaseRail phase={view.phase} />
+      {view.phase !== "lastDance" && <PhaseRail phase={view.phase} />}
       {view.phase === "mingle" && (
         <>
           <h1>The Mingle</h1>
@@ -74,50 +114,59 @@ export function Game({ view, offset, act, error }: { view: Exclude<GuestView, { 
       {view.phase === "dance" && (
         <>
           <h1>{view.announcement.name}</h1>
-          <p>Step {view.step.index + 1} of {view.step.total} · you hold {view.favours} favours</p>
-          <Candle deadline={view.step.stage === "answer" ? view.step.answerDeadline : view.step.deadline} length={view.step.stage === "answer" ? view.step.answerDeadline - view.step.startedAt : 3000} now={now} />
-          <p className="prompt">{view.step.prompt}</p>
-          <div className="choices">
-            {view.step.choices.map((c, i) => {
-              const r = view.step.reveal;
-              const cls = r ? (i === r.correct ? "right" : i === view.step.yourAnswer ? "wrong" : "") : i === view.step.yourAnswer ? "picked" : "";
-              return (
-                <button key={i} className={cls} disabled={view.step.stage !== "answer" || view.step.yourAnswer !== null} onClick={() => act({ type: "answer", position: i })}>{c}</button>
-              );
-            })}
-          </div>
-          {view.step.reveal && <p>{{ right: "✓ Right: ten points.", wrong: "✗ Not that one.", none: "No answer: no points." }[view.step.reveal.yourResult]}</p>}
+          {view.step ? <StepPanel step={view.step} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : <p>You are watching from the Balcony.</p>}
           <h2>The running ranking</h2>
           <Ranking ranking={view.ranking} guests={view.guests} you={view.you} />
-          <p>
-            Buy points ({view.buyRate} each):{" "}
-            <input type="number" min={1} max={view.favours} value={spend} onChange={(e) => setSpend(Math.max(1, Math.floor(Number(e.target.value))))} style={{ width: "4rem" }} />
-            <button disabled={view.favours < 1 || spend > view.favours} onClick={() => act({ type: "buyPoints", favours: spend })}>Spend favours</button>
-          </p>
         </>
       )}
-      {view.phase === "standings" && (
+      {view.phase === "sentDown" && (
         <>
-          <h1>The standings</h1>
+          <h1>Sent <em>down</em></h1>
+          <Candle deadline={view.deadline} length={SENT_DOWN_MS} now={now} />
           <h2>The Dance</h2>
           <ol className="ranking">
             {view.danceRanking.map((r, i) => {
-              const g = view.guests.find((x) => x.id === r.guest)!;
               const p = view.payout[r.guest]!;
               return (
                 <li key={r.guest} className={r.guest === view.you ? "me" : ""}>
-                  <span>{i + 1}</span><MaskIcon mask={g.mask} /><span style={{ flex: 1 }}>{g.name}{r.drawn ? " (drawn)" : ""}</span>
-                  <span>{r.points} pts</span><span>{p > 0 ? `+${p}` : p}</span>
+                  <span>{i + 1}</span><Name guests={view.guests} id={r.guest} />
+                  <span>{r.points} pts{r.drawn ? " (drawn)" : ""}</span><span>{p > 0 ? `+${p}` : p}</span>
                 </li>
               );
             })}
           </ol>
           <h2>Favours</h2>
-          <ul>
-            {[...view.guests].sort((a, b) => view.favours[b.id]! - view.favours[a.id]!).map((g) => (
-              <li key={g.id}><MaskIcon mask={g.mask} /><span style={{ flex: 1 }}>{g.name}</span><strong>{view.favours[g.id]}</strong></li>
-            ))}
-          </ul>
+          <FavourList view={view} favours={view.favours} />
+          <h2>Sent down to the Cellar</h2>
+          <ul>{view.cellar.map((id) => <li key={id} className={id === view.you ? "me" : ""}><Name guests={view.guests} id={id} /></li>)}</ul>
+          <p>{view.unmaskings === 0 ? "A warm-up round: nobody is unmasked tonight." : `The Cellar game unmasks ${view.unmaskings}.`}</p>
+          <h2>The Cellar game: {view.cellarGame.name}{view.cellarGame.encore ? " (an Encore)" : ""}</h2>
+          <p>{view.cellarGame.rulesSummary}</p>
+        </>
+      )}
+      {view.phase === "cellar" && (
+        <>
+          <h1>{view.announcement.name}</h1>
+          <p>{view.unmaskings === 0 ? "Played for practice: nobody is unmasked." : `The lowest ${view.unmaskings} will be unmasked.`}</p>
+          {view.step ? <StepPanel step={view.step} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : <p>The Cellar plays; you are watching.</p>}
+          <h2>The running ranking</h2>
+          <Ranking ranking={view.ranking} guests={view.guests} you={view.you} />
+        </>
+      )}
+      {view.phase === "unmasking" && (
+        <>
+          <h1>Unmasked</h1>
+          <Candle deadline={view.deadline} length={UNMASKING_MS} now={now} />
+          {view.unmasked.length === 0 ? <p>Nobody is unmasked this round.</p> : <ul>{view.unmasked.map((id) => <li key={id} className="unmasked"><Name guests={view.guests} id={id} /></li>)}</ul>}
+          <h2>Favours</h2>
+          <FavourList view={view} favours={view.favours} />
+        </>
+      )}
+      {view.phase === "lastDance" && (
+        <>
+          <h1>The Last Dance</h1>
+          <p>The last two guests remain:</p>
+          <ul>{view.finalists.map((id) => <li key={id}><Name guests={view.guests} id={id} /></li>)}</ul>
         </>
       )}
       {error && <p className="error">{error}</p>}

@@ -1,7 +1,7 @@
 import type { Problem, RaceMatchDef } from "../shared/types";
 import { drawInt, shuffle } from "./random";
 
-type Band = RaceMatchDef["generator"]["bands"][number]["kind"];
+type Band = "addsub" | "mul" | "twoOps";
 
 /** Near-misses of `answer`: off by 1 or 10, or the result of the wrong operation. */
 function nearMisses(seed: number, answer: number, wrongOp: number): [number[], number] {
@@ -44,7 +44,7 @@ function one(seed: number, kind: Band): [Problem & { key: string }, number] {
 }
 
 /** Seeded problems, harder as the steps go on; no prompt repeats. Returns the advanced seed. */
-export function generateSums(seed: number, def: RaceMatchDef, count: number): [Problem[], number] {
+export function generateSums(seed: number, def: RaceMatchDef & { generator: { kind: "sums"; bands: { fromStep: number; kind: Band }[] } }, count: number): [Problem[], number] {
   const problems: Problem[] = [];
   const seen = new Set<string>();
   for (let step = 0; step < count; step++) {

@@ -29,10 +29,10 @@ describe("Round 1's clock", () => {
     expect(late.match!.stepStartedAt).toBe(MINGLE_MS + 36_000);
   });
 
-  it("finishes the Dance inside its 5 minutes and shows the standings", () => {
+  it("finishes the Dance inside its 5 minutes and shows the sent-down screen", () => {
     const s = playDance(started(6, 3, 0), () => null);
-    expect(s.phase).toBe("standings");
-    expect(nextDeadline(s)).toBeNull();
+    expect(s.phase).toBe("sentDown");
+    expect(nextDeadline(s)).toBe(s.match!.deadline + 60_000);
     expect(s.danceResult!.ranking).toHaveLength(6);
     // 12 steps of 18s each from the start of the Dance.
     const dance = intoDance(started(6, 3, 0));
@@ -57,9 +57,9 @@ describe("The Tally", () => {
     const shapes = new Set<string>();
     for (const g of s.guests) {
       const v = viewFor(s, g.id) as Extract<GuestView, { phase: "dance" }>;
-      expect(v.step.prompt).toBe((viewFor(s, "g0") as Extract<GuestView, { phase: "dance" }>).step.prompt);
-      expect([...v.step.choices].sort()).toEqual([...(viewFor(s, "g0") as Extract<GuestView, { phase: "dance" }>).step.choices].sort());
-      shapes.add(v.step.choices.join());
+      expect(v.step!.prompt).toBe((viewFor(s, "g0") as Extract<GuestView, { phase: "dance" }>).step!.prompt);
+      expect([...v.step!.choices].sort()).toEqual([...(viewFor(s, "g0") as Extract<GuestView, { phase: "dance" }>).step!.choices].sort());
+      shapes.add(v.step!.choices.join());
     }
     expect(shapes.size).toBeGreaterThan(1);
   });
@@ -88,15 +88,15 @@ describe("The Tally", () => {
     s = must(s, { type: "answer", guest: "g0", position: right("g0") }, MINGLE_MS + 4000);
     s = must(s, { type: "answer", guest: "g1", position: (right("g1") + 1) % 4 }, MINGLE_MS + 5000);
     const v0 = viewFor(s, "g0") as Extract<GuestView, { phase: "dance" }>;
-    expect(v0.step.yourAnswer).toBe(right("g0"));
-    expect(v0.step.reveal).toBeNull();
+    expect(v0.step!.yourAnswer).toBe(right("g0"));
+    expect(v0.step!.reveal).toBeNull();
     expect(v0.ranking.every((r) => r.points === 0)).toBe(true);
     s = tickToDeadline(s);
     const after = viewFor(s, "g0") as Extract<GuestView, { phase: "dance" }>;
-    expect(after.step.stage).toBe("reveal");
-    expect(after.step.reveal).toEqual({ correct: right("g0"), yourResult: "right" });
+    expect(after.step!.stage).toBe("reveal");
+    expect(after.step!.reveal).toEqual({ correct: right("g0"), yourResult: "right" });
     expect(Object.fromEntries(after.ranking.map((r) => [r.guest, r.points]))).toEqual({ g0: 10, g1: 0, g2: 0, g3: 0 });
-    expect((viewFor(s, "g2") as Extract<GuestView, { phase: "dance" }>).step.reveal!.yourResult).toBe("none");
+    expect((viewFor(s, "g2") as Extract<GuestView, { phase: "dance" }>).step!.reveal!.yourResult).toBe("none");
   });
 
   it("rejects a late answer and a second answer, and takes one answer per step", () => {
@@ -204,10 +204,10 @@ describe("the ranking and payout", () => {
     }
   });
 
-  it("shows exact favours and the Dance ranking at the standings", () => {
+  it("shows exact favours and the Dance ranking when guests are sent down", () => {
     const s = playDance(started(5, 4), mixedPlayer);
-    const v = viewFor(s, "g2") as Extract<GuestView, { phase: "standings" }>;
-    expect(v.phase).toBe("standings");
+    const v = viewFor(s, "g2") as Extract<GuestView, { phase: "sentDown" }>;
+    expect(v.phase).toBe("sentDown");
     expect(Object.values(v.favours).reduce((a, b) => a + b, 0)).toBe(50);
   });
 

@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { expect } from "vitest";
 import { apply, newGame, viewFor } from "../../src/engine/game";
-import type { GameState, GuestId, GuestRecord } from "../../src/shared/types";
+import type { GameState, GuestId, GuestRecord, RaceState } from "../../src/shared/types";
 
 /**
  * Leak-test harness. Each case names one piece of a guest's private data and
@@ -20,29 +20,35 @@ export interface LeakCase {
 
 export const CASES: LeakCase[] = [
   { name: "joinedAt", set: (g, v) => ({ ...g, joinedAt: v }) },
-  // Favours are private until the standings.
-  { name: "favours", phases: ["mingle", "dance"], set: (g, v) => ({ ...g, favours: Math.abs(v) % 40 }) },
+  // Favours are private until guests are sent down.
+  { name: "favours", phases: ["mingle", "dance", "cellar"], set: (g, v) => ({ ...g, favours: Math.abs(v) % 40 }) },
   {
     name: "answer before the reveal",
-    phases: ["dance"],
+    phases: ["dance", "cellar"],
     setState: (s, id, v) =>
-      s.match!.stage !== "answer"
-        ? s
-        : { ...s, match: { ...s.match!, answers: { ...s.match!.answers, [id]: { position: Math.abs(v) % 4, at: s.match!.stepStartedAt + (Math.abs(v) % 10_000) } } } },
+      onRace(s, id, (m) =>
+        m.stage !== "answer" ? m : { ...m, answers: { ...m.answers, [id]: { position: Math.abs(v) % 4, at: m.stepStartedAt + (Math.abs(v) % 10_000) } } },
+      ),
   },
   {
     name: "choice layout",
-    phases: ["dance"],
-    setState: (s, id, v) => ({
-      ...s,
-      match: { ...s.match!, layouts: { ...s.match!.layouts, [id]: s.match!.layouts[id]!.map((l) => (Math.abs(v) % 2 ? [...l].reverse() : l)) } },
-    }),
+    phases: ["dance", "cellar"],
+    setState: (s, id, v) =>
+      onRace(s, id, (m) => ({ ...m, layouts: { ...m.layouts, [id]: m.layouts[id]!.map((l) => (Math.abs(v) % 2 ? [...l].reverse() : l)) } })),
   },
 ];
 
+/** Changes the running match (the Dance or the Cellar game) when the guest plays in it. */
+function onRace(s: GameState, id: GuestId, change: (m: RaceState) => RaceState): GameState {
+  const race = s.phase === "cellar" ? s.cellar!.race! : s.match!;
+  if (!(id in race.points)) return s;
+  const next = change(race);
+  return s.phase === "cellar" ? { ...s, cellar: { ...s.cellar!, race: next } } : { ...s, match: next };
+}
+
 function arbState(): fc.Arbitrary<GameState> {
   return fc
-    .record({ seed: fc.integer(), n: fc.integer({ min: 2, max: 10 }), stage: fc.constantFrom("foyer", "mingle", "dance"), steps: fc.integer({ min: 0, max: 6 }) })
+    .record({ seed: fc.integer(), n: fc.integer({ min: 2, max: 10 }), stage: fc.constantFrom("foyer", "mingle", "dance", "cellar"), steps: fc.integer({ min: 0, max: 6 }) })
     .map(({ seed, n, stage, steps }) => {
       let s = newGame(seed);
       for (let i = 0; i < n; i++) {
@@ -52,12 +58,22 @@ function arbState(): fc.Arbitrary<GameState> {
       if (stage !== "foyer" && n >= 4) {
         const r = apply(s, { type: "start", guest: "g0" }, 0);
         if (r.ok) s = r.state;
-        if (stage === "dance") {
+        if (stage === "dance" || stage === "cellar") {
           s = (apply(s, { type: "tick" }, s.deadline!) as { state: GameState }).state;
           // Some guests answer, and the clock runs on a few steps.
           for (let k = 0; k < steps; k++) {
             const m = s.match!;
             const a = apply(s, { type: "answer", guest: `g${k % n}`, position: k % 4 }, m.stepStartedAt + 1000);
+            if (a.ok) s = a.state;
+            if (k % 2) s = (apply(s, { type: "tick" }, s.deadline!) as { state: GameState }).state;
+          }
+        }
+        if (stage === "cellar") {
+          // Run the Dance out, through being sent down, into the Cellar game with a few answers in.
+          while (s.phase !== "cellar") s = (apply(s, { type: "tick" }, s.deadline!) as { state: GameState }).state;
+          for (let k = 0; k < steps; k++) {
+            const race = s.cellar!.race!;
+            const a = apply(s, { type: "answer", guest: s.cellar!.guests[k % s.cellar!.guests.length]!, position: k % 4 }, race.stepStartedAt + 1000);
             if (a.ok) s = a.state;
             if (k % 2) s = (apply(s, { type: "tick" }, s.deadline!) as { state: GameState }).state;
           }

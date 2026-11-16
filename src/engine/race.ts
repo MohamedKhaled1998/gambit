@@ -1,6 +1,6 @@
 import type { GuestId, RaceMatchDef, RaceState, RankingEntry, Rejection, StepView } from "../shared/types";
 import { draw, shuffle } from "./random";
-import { generateSums } from "./sums";
+import { generateProblems } from "./problems";
 
 /** The Race match type: same problems for every guest, four choices shuffled per guest, one answer per step. */
 
@@ -8,7 +8,7 @@ const REVEAL_MS = 3000;
 
 export function startRace(seed: number, def: RaceMatchDef, guests: GuestId[], at: number, steps: number): [RaceState, number] {
   let problems;
-  [problems, seed] = generateSums(seed, def, steps);
+  [problems, seed] = generateProblems(seed, def, steps);
   const layouts: RaceState["layouts"] = {};
   const drawKeys: RaceState["drawKeys"] = {};
   const points: RaceState["points"] = {};
