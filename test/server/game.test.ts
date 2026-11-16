@@ -170,7 +170,15 @@ describe("the loop", () => {
 });
 
 describe("the clock", () => {
+  /** A started game whose Dance is a Race match: these tests need its choices and live ranking. The Dance is drawn at random, so seat another game until it is one. */
   async function startedGame() {
+    for (let tries = 0; ; tries++) {
+      const game = await startedAnyGame();
+      const name = (game.host.lastView() as Extract<GuestView, { phase: "mingle" }>).announcement.name;
+      if (!["Gilded Auction", "The Pledge"].includes(name) || tries >= 40) return game;
+    }
+  }
+  async function startedAnyGame() {
     const grant = await createGameOverHttp("Ana");
     const host = await Client.connect(grant.code, grant.token);
     const others = [];

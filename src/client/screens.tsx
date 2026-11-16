@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MINGLE_MS, SENT_DOWN_MS, UNMASKING_MS, type ClientAction, type GuestView, type StepView, type AuctionView, type PublicGuest, type RankingEntry } from "../shared/types";
+import { MINGLE_MS, SENT_DOWN_MS, UNMASKING_MS, type ClientAction, type GuestView, type StepView, type AuctionView, type PledgeView, type PublicGuest, type RankingEntry } from "../shared/types";
 import { ColourStrip, MaskIcon, maskLabel } from "./mask";
 import { Talk, type TalkLink } from "./talk";
 
@@ -142,6 +142,64 @@ function BidPanel({ auction, guests, you, favours, buyRate, now, act }: { auctio
   );
 }
 
+/** The pledge entry, reckoning choice and reveal screens of a Group target step. */
+function PledgePanel({ pledge, guests, you, favours, buyRate, now, act }: { pledge: PledgeView; guests: PublicGuest[]; you: string; favours: number; buyRate: number; now: number; act: Act }) {
+  const [amount, setAmount] = useState(0);
+  const [spend, setSpend] = useState(1);
+  const name = (id: string) => guests.find((g) => g.id === id)!.name;
+  const f = pledge.final;
+  const reckoning = pledge.index >= pledge.total - 1;
+  return (
+    <>
+      <p>{reckoning ? "The reckoning" : `Pledge ${pledge.index + 1} of ${pledge.total - 1}`} · you keep {pledge.kept} points and hold {favours} favours</p>
+      <Candle deadline={pledge.deadline} length={pledge.deadline - pledge.startedAt} now={now} />
+      <p className="prompt">The pot: {pledge.pot} of {pledge.target}</p>
+      {pledge.stage === "pledge" &&
+        (pledge.yourPledge === null ? (
+          <p>
+            You are handed {pledge.stock} points.{" "}
+            <input type="number" min={0} max={pledge.stock} value={amount} onChange={(e) => setAmount(Math.max(0, Math.floor(Number(e.target.value))))} style={{ width: "5rem" }} />
+            <button disabled={amount > pledge.stock} onClick={() => act({ type: "pledge", amount })}>Pledge in secret</button>
+          </p>
+        ) : (
+          <p>You pledged {pledge.yourPledge}. The others are still pledging.</p>
+        ))}
+      {pledge.stage === "reveal" && <p>You pledged {pledge.yourPledge ?? 0}. The pot now holds {pledge.pot}.</p>}
+      {pledge.stage === "reckon" &&
+        (pledge.yourChoice === null ? (
+          <p>
+            <button onClick={() => act({ type: "reckon", choice: "share" })}>Share</button>
+            <button onClick={() => act({ type: "reckon", choice: "pocket" })}>Pocket</button>
+          </p>
+        ) : (
+          <p>You chose to {pledge.yourChoice}. The others are still choosing.</p>
+        ))}
+      {f && (
+        <>
+          <ol className="ranking">
+            {f.pledges.map((p) => (
+              <li key={p.guest} className={p.guest === you ? "me" : ""}>
+                <span>{name(p.guest)}</span>
+                <span>{p.amounts.join(" + ")}</span>
+                <span>{f.choices[p.guest]}</span>
+                {f.award[p.guest]! > 0 && <span>+{f.award[p.guest]} favours</span>}
+              </li>
+            ))}
+          </ol>
+          <p>{f.reached ? "The pot reached the target." : "The pot missed the target."}</p>
+        </>
+      )}
+      {pledge.stage !== "final" && (
+        <p>
+          Buy points ({buyRate} each):{" "}
+          <input type="number" min={1} max={favours} value={spend} onChange={(e) => setSpend(Math.max(1, Math.floor(Number(e.target.value))))} style={{ width: "4rem" }} />
+          <button disabled={favours < 1 || spend > favours} onClick={() => act({ type: "buyPoints", favours: spend })}>Spend favours</button>
+        </p>
+      )}
+    </>
+  );
+}
+
 function Name({ guests, id }: { guests: PublicGuest[]; id: string }) {
   const g = guests.find((x) => x.id === id)!;
   return <>{g.unmasked ? <span className="maskless" aria-label="unmasked" /> : <MaskIcon mask={g.mask} />}<span style={{ flex: 1 }}>{g.name}</span></>;
@@ -210,8 +268,8 @@ export function Game({ view, offset, act, error, talk, cover }: { view: Exclude<
       {view.phase === "dance" && (
         <>
           <h1>{view.announcement.name}</h1>
-          {view.auction ? <BidPanel auction={view.auction} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.step ? <StepPanel step={view.step} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : <p>You are watching from the Balcony.</p>}
-          <h2>The running ranking</h2>
+          {view.pledge ? <PledgePanel pledge={view.pledge} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.auction ? <BidPanel auction={view.auction} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.step ? <StepPanel step={view.step} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : <p>You are watching from the Balcony.</p>}
+          {(!view.pledge || view.ranking.length > 0) && <h2>The running ranking</h2>}
           <Ranking ranking={view.ranking} guests={view.guests} you={view.you} />
         </>
       )}

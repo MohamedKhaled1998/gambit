@@ -123,7 +123,64 @@ export interface SealedBidMatchDef {
   oncePerGame?: boolean;
   masks?: boolean;
 }
-export type MatchDef = RaceMatchDef | SealedBidMatchDef;
+/** A match on the Group target match type: guests pledge to one pot, then each shares or pockets. Data only. */
+export interface GroupTargetMatchDef {
+  id: string;
+  name: string;
+  type: "groupTarget";
+  rulesSummary: string;
+  workedExample: string;
+  guestRange: { dance: [number, number] | null; cellar: [number, number] | null };
+  /** Pledge steps plus the reckoning. */
+  steps: { dance: number | null; cellar: number | null };
+  pledgeSteps: number;
+  /** Points each guest is handed at every pledge step. */
+  pointsPerStep: number;
+  /** The pot must reach this × guests. */
+  targetPerGuest: number;
+  /** Favours for everyone when the pot reached the target and nobody pockets. */
+  allShareAward: number;
+  /** Favours for a lone pocket when the pot reached the target. */
+  lonePocketAward: number;
+  studySeconds: number;
+  /** The pledge phase, and the reckoning's choice phase. */
+  answerSeconds: number;
+  /** Pledge, then the reveal. */
+  stepSeconds: number;
+  preludeSeconds: number;
+  buyRate: number;
+  tieBreak: ("points" | "draw")[];
+  oncePerGame?: boolean;
+  masks?: boolean;
+}
+export type MatchDef = RaceMatchDef | SealedBidMatchDef | GroupTargetMatchDef;
+
+export type ReckoningChoice = "share" | "pocket";
+
+/** A Group target match running. Pledges, points and choices stay hidden until the final reveal. */
+export interface PledgeState {
+  def: GroupTargetMatchDef;
+  /** 0 to `pledgeSteps - 1` are pledge steps; `pledgeSteps` is the reckoning. */
+  step: number;
+  stage: "pledge" | "reveal" | "reckon" | "final";
+  stepStartedAt: number;
+  /** End of the phase where guests act. */
+  actDeadline: number;
+  /** End of the current stage. */
+  deadline: number;
+  drawKeys: Record<GuestId, number>;
+  /** Points a guest may pledge at the open step: handed points plus any bought. */
+  stock: Record<GuestId, number>;
+  /** This step's pledges, until the step's reveal. */
+  current: Record<GuestId, number>;
+  /** Pledges of the steps revealed, per guest. */
+  pledges: Record<GuestId, number[]>;
+  /** Kept points. */
+  points: Record<GuestId, number>;
+  choices: Record<GuestId, ReckoningChoice>;
+  /** Favours awarded per guest, set at the final reveal. */
+  award: Record<GuestId, number> | null;
+}
 
 /** A Sealed bid match running: one lot a step, bids hidden until the reveal. */
 export interface AuctionState {
@@ -270,6 +327,8 @@ export interface GameState {
   match: RaceState | null;
   /** The Dance when it is on the Sealed bid match type; `match` is then null. */
   auction: AuctionState | null;
+  /** The Dance when it is on the Group target match type. */
+  pledge: PledgeState | null;
   danceResult: DanceResult | null;
   cellar: CellarState | null;
   /** Every gift given this game. */
@@ -288,6 +347,8 @@ export type Action =
   | { type: "start"; guest: GuestId }
   | { type: "answer"; guest: GuestId; position: number }
   | { type: "bid"; guest: GuestId; amount: number }
+  | { type: "pledge"; guest: GuestId; amount: number }
+  | { type: "reckon"; guest: GuestId; choice: ReckoningChoice }
   | { type: "buyPoints"; guest: GuestId; favours: number }
   | { type: "gift"; guest: GuestId; to: GuestId; favours: number }
   | { type: "openRoom"; guest: GuestId; members: GuestId[] }
@@ -312,6 +373,11 @@ export type Rejection =
   | "already answered"
   | "already bid"
   | "no auction is running"
+  | "no pledge is running"
+  | "already pledged"
+  | "already chose"
+  | "pledges are whole points up to your stock"
+  | "wait for the reckoning"
   | "bids are whole points up to what you hold"
   | "no such choice"
   | "not enough favours"
@@ -379,6 +445,28 @@ export interface AuctionView {
   reveal: { bids: { guest: GuestId; amount: number }[]; winner: GuestId | null; price: number } | null;
 }
 
+/** A Group target step as one guest sees it. */
+export interface PledgeView {
+  index: number;
+  total: number;
+  stage: "pledge" | "reveal" | "reckon" | "final";
+  startedAt: number;
+  actDeadline: number;
+  deadline: number;
+  /** The most you can pledge now. */
+  stock: number;
+  /** Your own pledge to the open step, if made. */
+  yourPledge: number | null;
+  /** Your own kept points. */
+  kept: number;
+  /** The pot after the steps revealed so far: the only shared number before the final reveal. */
+  pot: number;
+  target: number;
+  yourChoice: ReckoningChoice | null;
+  /** Only at the final reveal: every pledge and choice with names, and the award. */
+  final: { pledges: { guest: GuestId; amounts: number[] }[]; choices: Record<GuestId, ReckoningChoice>; award: Record<GuestId, number>; reached: boolean } | null;
+}
+
 export interface Announcement {
   name: string;
   /** Drawn a second time this game: fresh problems, no Prelude. */
@@ -419,10 +507,12 @@ export type GuestView =
       favours: number;
       announcement: Announcement;
       buyRate: number;
-      /** Null for a guest who isn't playing (unmasked), and in a Sealed bid match. */
+      /** Null for a guest who isn't playing (unmasked), and in a Sealed bid or Group target match. */
       step: StepView | null;
       /** The Sealed bid step; null in other matches and for a guest who isn't playing. */
       auction: AuctionView | null;
+      /** The Group target step; null in other matches and for a guest who isn't playing. */
+      pledge: PledgeView | null;
       /** Public running ranking; bought points show at once. */
       ranking: RankingEntry[];
     })
@@ -510,12 +600,14 @@ export type ClientAction =
   | { type: "start" }
   | { type: "answer"; position: number }
   | { type: "bid"; amount: number }
+  | { type: "pledge"; amount: number }
+  | { type: "reckon"; choice: ReckoningChoice }
   | { type: "buyPoints"; favours: number }
   | { type: "gift"; to: GuestId; favours: number }
   | { type: "openRoom"; members: GuestId[] }
   | { type: "leaveRoom"; room: string };
 
-const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "bid", "buyPoints", "gift", "openRoom", "leaveRoom"] satisfies ClientAction["type"][];
+const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "bid", "pledge", "reckon", "buyPoints", "gift", "openRoom", "leaveRoom"] satisfies ClientAction["type"][];
 
 /** True only for the actions a client may send; never `tick`, which only the alarm sends. */
 export function isClientAction(value: unknown): value is ClientAction {

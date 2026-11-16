@@ -41,6 +41,17 @@ function playAuction(s: GameState): GameState {
   return s;
 }
 
+/** Plays a Group target Dance to its end: a guest-dependent pledge each step, and every third guest pockets. */
+function playPledge(s: GameState): GameState {
+  while (s.phase === "dance") {
+    const p = s.pledge!;
+    const act = (id: string): Action => (p.stage === "pledge" ? { type: "pledge", guest: id, amount: (Number(id.slice(1)) * 3 + p.step) % 11 } : { type: "reckon", guest: id, choice: Number(id.slice(1)) % 3 === 0 ? "pocket" : "share" });
+    if (p.stage === "pledge" || p.stage === "reckon") for (const id of Object.keys(p.points)) if (s.phase === "dance" && s.pledge!.stage === p.stage) s = must(s, act(id), p.stepStartedAt + 1000);
+    s = tickToDeadline(s);
+  }
+  return s;
+}
+
 /** The guests playing the running match: everyone in a Dance, the Cellar in a Cellar game. */
 const players = (s: GameState) => Object.keys((s.phase === "dance" ? s.match! : s.cellar!.race!).points);
 
@@ -48,6 +59,7 @@ const players = (s: GameState) => Object.keys((s.phase === "dance" ? s.match! : 
 export function playMatch(s: GameState, play: Player): GameState {
   const phase = s.phase;
   if (phase === "dance" && s.auction) return playAuction(s);
+  if (phase === "dance" && s.pledge) return playPledge(s);
   while (s.phase === phase) {
     const race = phase === "dance" ? s.match! : s.cellar!.race!;
     if (race.stage === "answer") {

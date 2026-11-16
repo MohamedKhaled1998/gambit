@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { expect } from "vitest";
 import { apply, newGame, viewFor } from "../../src/engine/game";
-import type { GameState, GuestId, GuestRecord, RaceState } from "../../src/shared/types";
+import type { Action, GameState, GuestId, GuestRecord, RaceState } from "../../src/shared/types";
 
 /**
  * Leak-test harness. Each case names one piece of a guest's private data and
@@ -26,6 +26,32 @@ export const CASES: LeakCase[] = [
       const a = s.auction;
       if (!a || a.stage !== "bid" || !(id in a.points)) return s;
       return { ...s, auction: { ...a, bids: { ...a.bids, [id]: { amount: Math.abs(v) % 51, order: Math.abs(v) % 7 } } } };
+    },
+  },
+  {
+    name: "a pledge before the step's reveal",
+    phases: ["dance"],
+    setState: (s, id, v) => {
+      const p = s.pledge;
+      if (!p || p.stage !== "pledge" || !(id in p.points)) return s;
+      return { ...s, pledge: { ...p, current: { ...p.current, [id]: Math.abs(v) % 11 } } };
+    },
+  },
+  {
+    name: "kept points and a choice before the final reveal",
+    phases: ["dance"],
+    setState: (s, id, v) => {
+      const p = s.pledge;
+      if (!p || p.stage === "final" || !(id in p.points)) return s;
+      return {
+        ...s,
+        pledge: {
+          ...p,
+          // Past pledges feed the pot total, which is public by design: only kept points and the choice change.
+          points: { ...p.points, [id]: Math.abs(v) % 90 },
+          choices: p.stage === "reckon" ? { ...p.choices, [id]: Math.abs(v) % 2 ? "pocket" : "share" } : p.choices,
+        },
+      };
     },
   },
   { name: "joinedAt", set: (g, v) => ({ ...g, joinedAt: v }) },
@@ -85,8 +111,12 @@ function arbState(): fc.Arbitrary<GameState> {
           s = (apply(s, { type: "tick" }, s.deadline!) as { state: GameState }).state;
           // Some guests answer, and the clock runs on a few steps.
           for (let k = 0; k < steps; k++) {
-            const m = (s.match ?? s.auction)!;
-            const a = apply(s, s.auction ? { type: "bid", guest: `g${k % n}`, amount: (k * 7) % 51 } : { type: "answer", guest: `g${k % n}`, position: k % 4 }, m.stepStartedAt + 1000);
+            const m = (s.match ?? s.auction ?? s.pledge)!;
+            const guest = `g${k % n}`;
+            const act: Action = s.pledge
+              ? s.pledge.stage === "reckon" ? { type: "reckon", guest, choice: k % 2 ? "pocket" : "share" } : { type: "pledge", guest, amount: (k * 7) % 11 }
+              : s.auction ? { type: "bid", guest, amount: (k * 7) % 51 } : { type: "answer", guest, position: k % 4 };
+            const a = apply(s, act, m.stepStartedAt + 1000);
             if (a.ok) s = a.state;
             if (k % 2) s = (apply(s, { type: "tick" }, s.deadline!) as { state: GameState }).state;
           }

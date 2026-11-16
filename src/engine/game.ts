@@ -26,6 +26,7 @@ import { drawMatch } from "./draw-match";
 import { drawMask } from "./masks";
 import { cellarSize, unmaskingsFor } from "./schedule";
 import { advanceAuction, auctionView, bidAuction, buyAuctionPoints, rankAuction, startAuction } from "./auction";
+import { advancePledge, buyPledgePoints, pledgeTo, pledgeView, publicRanking, rankPledge, reckonTo, startPledge } from "./pledge";
 import { advanceRace, answerRace, buyPoints, rankRace, startRace, stepView } from "./race";
 
 /** The rules engine: pure, with no clock, no Math.random and no platform imports. */
@@ -45,6 +46,7 @@ export function newGame(seed: number): GameState {
     danceEncore: false,
     match: null,
     auction: null,
+    pledge: null,
     danceResult: null,
     cellar: null,
     gifts: [],
@@ -80,6 +82,17 @@ export function apply(state: GameState, action: Action, now: number): ApplyResul
       next.deadline = next.auction!.deadline;
       return { ok: true, state: next };
     }
+    case "pledge":
+    case "reckon": {
+      const found = findPlayer(state, action.guest);
+      if (typeof found === "string") return reject(found);
+      if (!activePledge(state)) return reject("no pledge is running");
+      const next = structuredClone(state);
+      const why = action.type === "pledge" ? pledgeTo(next.pledge!, action.guest, action.amount, now) : reckonTo(next.pledge!, action.guest, action.choice, now);
+      if (why) return reject(why);
+      next.deadline = next.pledge!.deadline;
+      return { ok: true, state: next };
+    }
     case "buyPoints": {
       const found = findPlayer(state, action.guest);
       if (typeof found === "string") return reject(found);
@@ -88,6 +101,7 @@ export function apply(state: GameState, action: Action, now: number): ApplyResul
       const next = structuredClone(state);
       next.guests.find((g) => g.id === action.guest)!.favours -= action.favours;
       if (activeAuction(next)) buyAuctionPoints(next.auction!, action.guest, action.favours);
+      else if (activePledge(next)) buyPledgePoints(next.pledge!, action.guest, action.favours);
       else buyPoints(activeRace(next)!, action.guest, action.favours);
       return { ok: true, state: next };
     }
@@ -180,11 +194,14 @@ function activeRace(state: GameState): RaceState | null {
 /** The Sealed bid Dance running right now: only while the Dance phase lasts. */
 const activeAuction = (state: GameState) => (state.phase === "dance" ? state.auction : null);
 
+/** The Group target Dance running right now: only while the Dance phase lasts. */
+const activePledge = (state: GameState) => (state.phase === "dance" ? state.pledge : null);
+
 /** The seated guest taking part in the running match, or why they can't. */
 function findPlayer(state: GameState, id: GuestId): GuestRecord | Rejection {
   const me = state.guests.find((g) => g.id === id);
   if (!me) return "no such guest";
-  const running = activeAuction(state) ?? activeRace(state);
+  const running = activeAuction(state) ?? activePledge(state) ?? activeRace(state);
   if (!running) return "no Dance is running";
   return id in running.points ? me : "not playing in this match";
 }
@@ -200,6 +217,7 @@ function drawDance(state: GameState): GameState | null {
     danceEncore: drawn.encore,
     match: null,
     auction: null,
+    pledge: null,
     danceResult: null,
     cellar: null,
     drawn: [...state.drawn, { round: state.round, role: "dance", id: drawn.match.id }],
@@ -224,7 +242,12 @@ function tick(state: GameState, now: number): GameState {
     if (s.phase === "mingle") {
       const def = s.danceDef as MatchDef;
       const guests = remaining(s).map((g) => g.id);
-      if (def.type === "sealedBid") {
+      if (def.type === "groupTarget") {
+        const [pledge, seed] = startPledge(s.seed, def, guests, at);
+        s.seed = seed;
+        s.pledge = pledge;
+        s.deadline = pledge.deadline;
+      } else if (def.type === "sealedBid") {
         const [auction, seed] = startAuction(s.seed, def, guests, at);
         s.seed = seed;
         s.auction = auction;
@@ -237,8 +260,9 @@ function tick(state: GameState, now: number): GameState {
       }
       s.phase = "dance";
     } else if (s.phase === "dance") {
-      const running = s.auction ?? s.match!;
-      if (s.auction ? advanceAuction(s.auction, at) : advanceRace(s.match!, at)) s.deadline = running.deadline;
+      const running = s.pledge ?? s.auction ?? s.match!;
+      const more = s.pledge ? advancePledge(s.pledge, at) : s.auction ? advanceAuction(s.auction, at) : advanceRace(s.match!, at);
+      if (more) s.deadline = running.deadline;
       else sendDown(s, at);
     } else if (s.phase === "sentDown") {
       const c = s.cellar!;
@@ -263,16 +287,18 @@ function tick(state: GameState, now: number): GameState {
 
 /** The Dance's strict ranking sets the payout (favours never go below 0), then the lower half is sent down. */
 function sendDown(s: GameState, at: number): void {
-  const ranking = s.auction ? rankAuction(s.auction) : rankRace(s.match!);
+  const ranking = s.pledge ? rankPledge(s.pledge) : s.auction ? rankAuction(s.auction) : rankRace(s.match!);
+  // The payout table sets favours, except in The Pledge, whose own award takes its place.
   const table = DANCE_PAYOUTS[ranking.length]!;
   const payout: Record<GuestId, number> = {};
   ranking.forEach((r, i) => {
-    payout[r.guest] = table[i]!;
+    payout[r.guest] = s.pledge ? s.pledge.award![r.guest]! : table[i]!;
     const g = s.guests.find((x) => x.id === r.guest)!;
-    g.favours = Math.max(0, g.favours + table[i]!);
+    g.favours = Math.max(0, g.favours + payout[r.guest]!);
   });
   s.danceResult = { ranking, payout };
   s.auction = null;
+  s.pledge = null;
 
   const left = remaining(s);
   const unmaskings = unmaskingsFor({ remaining: left.length, unmaskings: left.length - 2, rounds: s.rounds - s.round + 1 });
@@ -348,7 +374,8 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
     case "dance": {
       const race = state.match;
       const auction = state.auction;
-      const playing = guest in (auction ?? race!).points;
+      const pledge = state.pledge;
+      const playing = guest in (pledge ?? auction ?? race!).points;
       return {
         ...seated,
         phase: "dance",
@@ -358,7 +385,9 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
         buyRate: def!.buyRate,
         step: race && playing ? stepView(race, guest) : null,
         auction: auction && playing ? auctionView(auction, guest) : null,
-        ranking: auction ? rankAuction(auction) : rankRace(race!),
+        pledge: pledge && playing ? pledgeView(pledge, guest) : null,
+        // The Pledge hides ranks until its final reveal.
+        ranking: pledge ? publicRanking(pledge) : auction ? rankAuction(auction) : rankRace(race!),
       };
     }
     case "sentDown":
