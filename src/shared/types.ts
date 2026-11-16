@@ -299,6 +299,29 @@ export interface Room {
   unmasked?: GuestId[];
 }
 
+/** A match an unmasked guest plays along: a race on the same problems, or a shadow copy of an interactive match. */
+export type AlongMatch = RaceState | AuctionState | BluffState;
+
+/** The unmasked guests' own run of the current match, with its own clock; it never touches the real match. */
+export interface Along {
+  match: AlongMatch;
+  /** The last step has been revealed. */
+  done: boolean;
+}
+
+/** One Cellar game's predictions: who each unmasked guest picked to be unmasked. */
+export interface PredictionRound {
+  round: number;
+  /** The guests sent down: the only ones the Cellar game can unmask. */
+  cellar: GuestId[];
+  /** Picks each guest makes: one per unmasking. */
+  unmaskings: number;
+  /** Picks by unmasked guest; open until the Cellar game starts. Never in a remaining guest's view before the end screen. */
+  picks: Record<GuestId, GuestId[]>;
+  /** Who the Cellar game unmasked; null until it ends. */
+  unmasked: GuestId[] | null;
+}
+
 export interface GameState {
   phase: "foyer" | "mingle" | "dance" | "sentDown" | "cellar" | "unmasking" | "lastDance";
   format: Format;
@@ -331,6 +354,10 @@ export interface GameState {
   rooms: Room[];
   /** One Cellar talk per Cellar game that has started, for exactly the guests sent down; never in a view. */
   cellarTalks: Room[];
+  /** What unmasked guests play along with in the running match, if anything; kept until the next match starts. */
+  along: Along | null;
+  /** Every Cellar game's predictions that has had a count to unmask. */
+  predictions: PredictionRound[];
 }
 
 export type Action =
@@ -345,6 +372,7 @@ export type Action =
   | { type: "gift"; guest: GuestId; to: GuestId; favours: number }
   | { type: "openRoom"; guest: GuestId; members: GuestId[] }
   | { type: "leaveRoom"; guest: GuestId; room: string }
+  | { type: "predict"; guest: GuestId; picks: GuestId[] }
   | { type: "tick" };
 
 export type Rejection =
@@ -381,7 +409,10 @@ export type Rejection =
   | "a Room needs another guest"
   | "a Room can't hold everyone"
   | "no such Room"
-  | "not in that Room";
+  | "not in that Room"
+  | "only unmasked guests predict"
+  | "predictions are closed"
+  | "pick one guest for each unmasking";
 
 export type ApplyResult = { ok: true; state: GameState } | { ok: false; reason: Rejection };
 
@@ -479,6 +510,39 @@ interface Seated {
   rooms: Room[];
   /** This guest's own chats and whether they can post in each: `chatAccess`, so the phone holds no rules. */
   chats: ChatAccess;
+  /** Unmasked guests only: the match they play along with. Null for everyone else, and while there is nothing to play. */
+  along: AlongView | null;
+  /** Unmasked guests only: the Cellar game predictions, live. Null for everyone else until the end screen. */
+  predictions: PredictionsView | null;
+}
+
+/** The unmasked guests' play-along, as one unmasked guest sees it: the shared ranking, and their own steps. */
+export interface AlongView {
+  name: string;
+  /** Ranked among the unmasked guests who play it, by raw points; shown on the Balcony. */
+  ranking: RankingEntry[];
+  /** Your own private step; null when you are only watching. */
+  step: StepView | null;
+  auction: AuctionView | null;
+  bluff: BluffView | null;
+  done: boolean;
+}
+
+/** The predictions as the Balcony sees them. */
+export interface PredictionsView {
+  /** The guests this round's Cellar game could unmask, and how many picks to make, while picks are open; else null. */
+  open: { cellar: GuestId[]; picks: number } | null;
+  rounds: PredictionRound[];
+  /** Points so far: one per correct pick, by unmasked guest. */
+  scores: Record<GuestId, number>;
+}
+
+/** The predictions revealed to everyone at the end. */
+export interface PredictionsReveal {
+  rounds: PredictionRound[];
+  scores: Record<GuestId, number>;
+  /** The unmasked guests whose predictions scored best; ties share the title. Empty when nobody scored. */
+  oracle: GuestId[];
 }
 
 export type GuestView =
@@ -552,6 +616,8 @@ export type GuestView =
       /** Placeholder end screen: the last two. */
       finalists: GuestId[];
       favours: Record<GuestId, number>;
+      /** Every prediction, and the Oracle. */
+      reveal: PredictionsReveal;
     });
 
 /** A chat's id: "table", "balcony", a Room's id, or a Cellar talk's id ("cellar-" and its round). */
@@ -599,9 +665,10 @@ export type ClientAction =
   | { type: "buyPoints"; favours: number }
   | { type: "gift"; to: GuestId; favours: number }
   | { type: "openRoom"; members: GuestId[] }
-  | { type: "leaveRoom"; room: string };
+  | { type: "leaveRoom"; room: string }
+  | { type: "predict"; picks: GuestId[] };
 
-const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "bid", "claim", "call", "buyPoints", "gift", "openRoom", "leaveRoom"] satisfies ClientAction["type"][];
+const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "bid", "claim", "call", "buyPoints", "gift", "openRoom", "leaveRoom", "predict"] satisfies ClientAction["type"][];
 
 /** True only for the actions a client may send; never `tick`, which only the alarm sends. */
 export function isClientAction(value: unknown): value is ClientAction {

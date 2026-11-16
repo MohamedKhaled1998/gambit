@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { expect } from "vitest";
-import { apply, newGame, viewFor } from "../../src/engine/game";
+import { apply, newGame, nextDeadline, viewFor } from "../../src/engine/game";
 import type { GameState, GuestId, GuestRecord, RaceState } from "../../src/shared/types";
 
 /**
@@ -50,6 +50,29 @@ export const CASES: LeakCase[] = [
       return { ...s, bluff: { ...b, calls: { ...b.calls, [id]: v % 3 === 0 ? null : ids[Math.abs(v) % ids.length]! } } };
     },
   },
+  {
+    name: "an unmasked guest's play-along answer or bid",
+    phases: ["dance", "cellar"],
+    // The Balcony shares its ranking among the unmasked guests, so only a remaining guest must not see it.
+    setState: (s, id, v, observer) => {
+      const a = s.along;
+      if (!a || !(id in a.match.points) || s.guests.find((g) => g.id === observer)!.unmaskedIn !== undefined) return s;
+      const m = a.match;
+      const points = { ...m.points, [id]: Math.abs(v) % 90 };
+      if ("answers" in m) return { ...s, along: { ...a, match: { ...m, points, answers: { ...m.answers, [id]: { position: Math.abs(v) % 4, at: m.stepStartedAt + 1 } } } } };
+      return { ...s, along: { ...a, match: { ...m, points } } };
+    },
+  },
+  {
+    name: "an unmasked guest's Cellar game picks",
+    // Picks are live on the Balcony; only a remaining guest must not see them, until the end screen.
+    setState: (s, id, v, observer) => {
+      const last = s.predictions.at(-1);
+      if (!last || s.phase === "lastDance" || s.guests.find((g) => g.id === observer)!.unmaskedIn !== undefined) return s;
+      const picks = { ...last.picks, [id]: last.cellar.slice(0, 1 + (Math.abs(v) % last.unmaskings)) };
+      return { ...s, predictions: [...s.predictions.slice(0, -1), { ...last, picks }] };
+    },
+  },
   { name: "joinedAt", set: (g, v) => ({ ...g, joinedAt: v }) },
   // Favours are private until guests are sent down.
   { name: "favours", phases: ["mingle", "dance", "cellar"], set: (g, v) => ({ ...g, favours: Math.abs(v) % 40 }) },
@@ -93,7 +116,7 @@ function onRace(s: GameState, id: GuestId, change: (m: RaceState) => RaceState):
 
 function arbState(): fc.Arbitrary<GameState> {
   return fc
-    .record({ seed: fc.integer(), n: fc.integer({ min: 2, max: 10 }), stage: fc.constantFrom("foyer", "mingle", "dance", "cellar"), steps: fc.integer({ min: 0, max: 6 }) })
+    .record({ seed: fc.integer(), n: fc.integer({ min: 2, max: 10 }), stage: fc.constantFrom("foyer", "mingle", "dance", "cellar", "later"), steps: fc.integer({ min: 0, max: 6 }) })
     .map(({ seed, n, stage, steps }) => {
       let s = newGame(seed);
       for (let i = 0; i < n; i++) {
@@ -103,6 +126,27 @@ function arbState(): fc.Arbitrary<GameState> {
       if (stage !== "foyer" && n >= 4) {
         const r = apply(s, { type: "start", guest: "g0" }, 0);
         if (r.ok) s = r.state;
+        if (stage === "later") {
+          // Round 1 runs out, so some guests are unmasked and play along in round 2's Dance or the sent-down screen.
+          while (s.round < 2 || s.phase === "mingle") {
+            const m = s.match ?? s.cellar?.race;
+            if (m && (s.phase === "dance" || s.phase === "cellar")) {
+              const g = s.phase === "dance" ? `g${steps % n}` : s.cellar!.guests[0]!;
+              const a = apply(s, { type: "answer", guest: g, position: steps % 4 }, m.stepStartedAt + 1000);
+              if (a.ok) s = a.state;
+            }
+            s = (apply(s, { type: "tick" }, nextDeadline(s)!) as { state: GameState }).state;
+          }
+          for (let k = 0; k < steps; k++) {
+            const a = s.along?.match;
+            const g = s.guests.filter((x) => x.unmaskedIn !== undefined)[k % Math.max(1, s.guests.filter((x) => x.unmaskedIn !== undefined).length)];
+            if (a && g && "answers" in a) {
+              const r = apply(s, { type: "answer", guest: g.id, position: k % 4 }, a.stepStartedAt + 500);
+              if (r.ok) s = r.state;
+            }
+            s = (apply(s, { type: "tick" }, nextDeadline(s)!) as { state: GameState }).state;
+          }
+        }
         if (stage === "dance" || stage === "cellar") {
           s = (apply(s, { type: "tick" }, s.deadline!) as { state: GameState }).state;
           // Some guests answer, and the clock runs on a few steps.

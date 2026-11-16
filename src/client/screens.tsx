@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MINGLE_MS, SENT_DOWN_MS, UNMASKING_MS, type ClientAction, type GuestView, type StepView, type AuctionView, type BluffView, type PublicGuest, type RankingEntry } from "../shared/types";
+import { MINGLE_MS, SENT_DOWN_MS, UNMASKING_MS, type ClientAction, type GuestView, type StepView, type AlongView, type AuctionView, type BluffView, type PredictionsView, type PredictionsReveal, type PublicGuest, type RankingEntry } from "../shared/types";
 import { ColourStrip, MaskIcon, maskLabel } from "./mask";
 import { Talk, type TalkLink } from "./talk";
 
@@ -233,6 +233,82 @@ function GiftScreen({ view, act }: { view: Extract<GuestView, { phase: "mingle" 
   );
 }
 
+/** The Balcony's own screens: the play-along, with nothing at stake, and the Cellar game predictions. */
+function Balcony({ view, now, act }: { view: Exclude<GuestView, { phase: "foyer" }>; now: number; act: Act }) {
+  const { along, predictions } = view;
+  if (!along && !predictions) return null;
+  // The play-along's guests are all unmasked, but they are the ones playing it.
+  const players = along ? view.guests.filter((g) => along.ranking.some((r) => r.guest === g.id)).map((g) => ({ ...g, unmasked: false })) : [];
+  return (
+    <section className="balcony">
+      <h2>The Balcony</h2>
+      {along && <AlongPanel along={along} players={players} you={view.you} now={now} act={act} />}
+      {predictions && <PredictionPanel predictions={predictions} guests={view.guests} you={view.you} act={act} />}
+    </section>
+  );
+}
+
+function AlongPanel({ along, players, you, now, act }: { along: AlongView; players: PublicGuest[]; you: string; now: number; act: Act }) {
+  return (
+    <>
+      <h3>Playing along: {along.name}{along.done ? " (over)" : ""}</h3>
+      <p>Nothing is at stake here.</p>
+      {!along.done && along.bluff ? <ToastPanel bluff={along.bluff} guests={players} you={you} favours={0} buyRate={0} now={now} act={act} /> : !along.done && along.auction ? <BidPanel auction={along.auction} guests={players} you={you} favours={0} buyRate={0} now={now} act={act} /> : !along.done && along.step ? <StepPanel step={along.step} favours={0} buyRate={0} now={now} act={act} /> : null}
+      <Ranking ranking={along.ranking} guests={players} you={you} />
+    </>
+  );
+}
+
+function PredictionPanel({ predictions, guests, you, act }: { predictions: PredictionsView; guests: PublicGuest[]; you: string; act: Act }) {
+  const [picked, setPicked] = useState<string[]>([]);
+  const name = (id: string) => guests.find((g) => g.id === id)?.name ?? "?";
+  const open = predictions.open;
+  return (
+    <>
+      <h3>Predictions</h3>
+      {open && (
+        <>
+          <p>Who will the Cellar game unmask? Pick {open.picks}, until it starts.</p>
+          <ul>
+            {open.cellar.map((id) => (
+              <li key={id}>
+                <button className={picked.includes(id) ? "picked" : ""} onClick={() => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id].slice(-open.picks)))}>{name(id)}</button>
+              </li>
+            ))}
+          </ul>
+          <button disabled={picked.length !== open.picks} onClick={() => act({ type: "predict", picks: picked })}>Lock in my picks</button>
+        </>
+      )}
+      <ul>
+        {predictions.rounds.map((r) => (
+          <li key={r.round}>
+            Round {r.round}: {Object.entries(r.picks).map(([g, p]) => `${name(g)} picked ${p.map(name).join(" and ")}`).join("; ") || "no picks"}
+            {r.unmasked && ` · unmasked: ${r.unmasked.map(name).join(", ")}`}
+          </li>
+        ))}
+      </ul>
+      <p>Points: {Object.entries(predictions.scores).map(([g, n]) => `${g === you ? "you" : name(g)} ${n}`).join(", ")}</p>
+    </>
+  );
+}
+
+function PredictionReveal({ reveal, guests }: { reveal: PredictionsReveal; guests: PublicGuest[] }) {
+  const name = (id: string) => guests.find((g) => g.id === id)?.name ?? "?";
+  return (
+    <>
+      <h2>The predictions</h2>
+      <ul>
+        {reveal.rounds.map((r) => (
+          <li key={r.round}>
+            Round {r.round} ({r.unmasked ? `unmasked: ${r.unmasked.map(name).join(", ")}` : "not played"}): {Object.entries(r.picks).map(([g, p]) => `${name(g)} picked ${p.map(name).join(" and ")}`).join("; ") || "no picks"}
+          </li>
+        ))}
+      </ul>
+      <p>{reveal.oracle.length ? `The Oracle: ${reveal.oracle.map(name).join(" and ")} (${reveal.scores[reveal.oracle[0]!]} points).` : "No Oracle tonight: no prediction came true."}</p>
+    </>
+  );
+}
+
 export function Game({ view, offset, act, error, talk, cover }: { view: Exclude<GuestView, { phase: "foyer" }>; offset: number; act: Act; error: string | null; talk: TalkLink; cover(): void }) {
   const now = useServerNow(offset);
   return (
@@ -308,8 +384,10 @@ export function Game({ view, offset, act, error, talk, cover }: { view: Exclude<
           <h1>The Last Dance</h1>
           <p>The last two guests remain:</p>
           <ul>{view.finalists.map((id) => <li key={id}><Name guests={view.guests} id={id} /></li>)}</ul>
+          <PredictionReveal reveal={view.reveal} guests={view.guests} />
         </>
       )}
+      <Balcony view={view} now={now} act={act} />
       {error && <p className="error">{error}</p>}
     </main>
     <Talk view={view} link={talk} cover={cover} />

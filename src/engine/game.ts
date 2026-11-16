@@ -5,6 +5,7 @@ import {
   QUICK_ROUNDS,
   SENT_DOWN_MS,
   UNMASKING_MS,
+  type AlongMatch,
   type CellarState,
   type GuestRecord,
   type RaceState,
@@ -22,7 +23,9 @@ import {
   type Mask,
   type Rejection,
 } from "../shared/types";
+import { advanceAlong, alongDeadline, alongView, startAlong } from "./along";
 import { drawMatch } from "./draw-match";
+import { predict, predictionsReveal, predictionsView } from "./predictions";
 import { drawMask } from "./masks";
 import { cellarSize, unmaskingsFor } from "./schedule";
 import { advanceAuction, auctionView, bidAuction, buyAuctionPoints, rankAuction, startAuction } from "./auction";
@@ -53,6 +56,8 @@ export function newGame(seed: number): GameState {
     mingleStandings: {},
     rooms: [],
     cellarTalks: [],
+    along: null,
+    predictions: [],
   };
 }
 
@@ -63,41 +68,45 @@ export function apply(state: GameState, action: Action, now: number): ApplyResul
     case "tick":
       return { ok: true, state: tick(state, now) };
     case "answer": {
-      const found = findPlayer(state, action.guest);
+      const found = seat(state, action.guest);
       if (typeof found === "string") return reject(found);
       const next = structuredClone(state);
-      if (!activeRace(next)) return reject("no Dance is running");
-      const why = answerRace(activeRace(next)!, action.guest, action.position, now);
+      const race = found.along ? alongOf(next, "race") : activeRace(next);
+      if (!race) return reject("no Dance is running");
+      const why = answerRace(race, action.guest, action.position, now);
       if (why) return reject(why);
-      next.deadline = activeRace(next)!.deadline;
+      if (!found.along) next.deadline = race.deadline;
       return { ok: true, state: next };
     }
     case "bid": {
-      const found = findPlayer(state, action.guest);
+      const found = seat(state, action.guest);
       if (typeof found === "string") return reject(found);
-      if (!activeAuction(state)) return reject("no auction is running");
       const next = structuredClone(state);
-      const why = bidAuction(next.auction!, action.guest, action.amount, now);
+      const auction = found.along ? alongOf(next, "sealedBid") : activeAuction(next);
+      if (!auction) return reject("no auction is running");
+      const why = bidAuction(auction, action.guest, action.amount, now);
       if (why) return reject(why);
-      next.deadline = next.auction!.deadline;
+      if (!found.along) next.deadline = auction.deadline;
       return { ok: true, state: next };
     }
     case "claim":
     case "call": {
-      const found = findPlayer(state, action.guest);
+      const found = seat(state, action.guest);
       if (typeof found === "string") return reject(found);
-      if (!activeBluff(state)) return reject("no toast is running");
       const next = structuredClone(state);
-      const why = action.type === "claim" ? claimBluff(next.bluff!, action.guest, action.value, now) : callBluff(next.bluff!, action.guest, action.target, now);
+      const bluff = found.along ? alongOf(next, "bluff") : activeBluff(next);
+      if (!bluff) return reject("no toast is running");
+      const why = action.type === "claim" ? claimBluff(bluff, action.guest, action.value, now) : callBluff(bluff, action.guest, action.target, now);
       if (why) return reject(why);
-      next.deadline = next.bluff!.deadline;
+      if (!found.along) next.deadline = bluff.deadline;
       return { ok: true, state: next };
     }
     case "buyPoints": {
-      const found = findPlayer(state, action.guest);
+      const found = seat(state, action.guest);
       if (typeof found === "string") return reject(found);
       if (!Number.isInteger(action.favours) || action.favours < 1) return reject("bad amount");
-      if (action.favours > found.favours) return reject("not enough favours");
+      // An unmasked guest's favours have vanished: nothing to spend in a play-along.
+      if (found.along || action.favours > found.me.favours) return reject("not enough favours");
       const next = structuredClone(state);
       next.guests.find((g) => g.id === action.guest)!.favours -= action.favours;
       if (activeAuction(next)) buyAuctionPoints(next.auction!, action.guest, action.favours);
@@ -142,6 +151,11 @@ export function apply(state: GameState, action: Action, now: number): ApplyResul
       const r = next.rooms.find((x) => x.id === action.room)!;
       r.members = r.members.filter((m) => m !== action.guest);
       return { ok: true, state: next };
+    }
+    case "predict": {
+      const next = structuredClone(state);
+      const why = predict(next, action.guest, action.picks);
+      return why ? reject(why) : { ok: true, state: next };
     }
     case "join": {
       if (state.phase !== "foyer") return reject("doors are closed");
@@ -197,13 +211,21 @@ const activeAuction = (state: GameState) => (state.phase === "dance" ? state.auc
 /** The Bluff Dance running right now: only while the Dance phase lasts. */
 const activeBluff = (state: GameState) => (state.phase === "dance" ? state.bluff : null);
 
-/** The seated guest taking part in the running match, or why they can't. */
-function findPlayer(state: GameState, id: GuestId): GuestRecord | Rejection {
+/** The play-along's match when it is of this match type and still running. */
+function alongOf<T extends AlongMatch["def"]["type"]>(state: GameState, type: T): Extract<AlongMatch, { def: { type: T } }> | null {
+  const a = state.along;
+  return a && !a.done && a.match.def.type === type ? (a.match as Extract<AlongMatch, { def: { type: T } }>) : null;
+}
+
+/** The seated guest taking part in the running match (or, unmasked, in its play-along), or why they can't. */
+function seat(state: GameState, id: GuestId): { me: GuestRecord; along: boolean } | Rejection {
   const me = state.guests.find((g) => g.id === id);
   if (!me) return "no such guest";
   const running = activeAuction(state) ?? activeBluff(state) ?? activeRace(state);
   if (!running) return "no Dance is running";
-  return id in running.points ? me : "not playing in this match";
+  if (id in running.points) return { me, along: false };
+  if (state.along && !state.along.done && Object.hasOwn(state.along.match.points, id)) return { me, along: true };
+  return "not playing in this match";
 }
 
 /** Draws the round's Dance and announces it in the state. */
@@ -220,6 +242,7 @@ function drawDance(state: GameState): GameState | null {
     bluff: null,
     danceResult: null,
     cellar: null,
+    along: null,
     drawn: [...state.drawn, { round: state.round, role: "dance", id: drawn.match.id }],
   };
 }
@@ -235,13 +258,22 @@ function fitsFormat(state: GameState): boolean {
 
 /** The clock: runs every phase whose deadline has passed, each at its own deadline, not at `now`. */
 function tick(state: GameState, now: number): GameState {
-  if (state.deadline === null || now < state.deadline) return state;
+  const first = nextDeadline(state);
+  if (first === null || now < first) return state;
   let s = structuredClone(state);
-  while (s.deadline !== null && now >= s.deadline) {
-    const at = s.deadline;
+  for (;;) {
+    // The play-along keeps its own clock; it moves alone and never touches the real deadline.
+    const own = alongDeadline(s.along);
+    const at = own !== null && (s.deadline === null || own <= s.deadline) ? own : s.deadline;
+    if (at === null || now < at) break;
+    if (at === own) {
+      advanceAlong(s.along!, at);
+      continue;
+    }
     if (s.phase === "mingle") {
       const def = s.danceDef as MatchDef;
       const guests = remaining(s).map((g) => g.id);
+      const before = s.seed;
       if (def.type === "bluff") {
         const [bluff, seed] = startBluff(s.seed, def, guests, at);
         s.seed = seed;
@@ -258,6 +290,7 @@ function tick(state: GameState, now: number): GameState {
         s.match = race;
         s.deadline = race.deadline;
       }
+      s.along = startAlong(def, "dance", unmaskedGuests(s), before, at);
       s.phase = "dance";
     } else if (s.phase === "dance") {
       const running = s.bluff ?? s.auction ?? s.match!;
@@ -267,8 +300,10 @@ function tick(state: GameState, now: number): GameState {
     } else if (s.phase === "sentDown") {
       const c = s.cellar!;
       if (c.def.type !== "race") throw new Error(`${c.def.name} can't be a Cellar game`);
+      const before = s.seed;
       const [race, seed] = startRace(s.seed, c.def, c.guests, at, c.def.steps.cellar!);
       s.seed = seed;
+      s.along = startAlong(c.def, "cellar", unmaskedGuests(s), before, at);
       c.race = race;
       s.cellarTalks.push({ id: `cellar-${s.round}`, members: [...c.guests] });
       s.match = null;
@@ -285,6 +320,9 @@ function tick(state: GameState, now: number): GameState {
   return s;
 }
 
+/** The guests already unmasked: they play along with a match that starts now. */
+const unmaskedGuests = (state: GameState): GuestId[] => state.guests.filter((g) => g.unmaskedIn !== undefined).map((g) => g.id);
+
 /** The Dance's strict ranking sets the payout (favours never go below 0), then the lower half is sent down. */
 function sendDown(s: GameState, at: number): void {
   const ranking = s.bluff ? rankBluff(s.bluff) : s.auction ? rankAuction(s.auction) : rankRace(s.match!);
@@ -296,6 +334,7 @@ function sendDown(s: GameState, at: number): void {
     g.favours = Math.max(0, g.favours + table[i]!);
   });
   s.danceResult = { ranking, payout };
+  if (s.along) s.along.done = true;
   s.auction = null;
   s.bluff = null;
 
@@ -312,6 +351,8 @@ function sendDown(s: GameState, at: number): void {
   s.seed = drawn.seed;
   s.drawn.push({ round: s.round, role: "cellar", id: drawn.match.id });
   s.cellar = { def: structuredClone(drawn.match), encore: drawn.encore, guests: down, unmaskings, race: null, ranking: null, unmasked: [] };
+  // Unmasked guests may pick who the Cellar game unmasks, from now until it starts.
+  if (unmaskings > 0) s.predictions.push({ round: s.round, cellar: [...down], unmaskings, picks: {}, unmasked: null });
   s.phase = "sentDown";
   s.deadline = at + SENT_DOWN_MS;
 }
@@ -325,6 +366,8 @@ function unmask(s: GameState, at: number): void {
   const c = s.cellar!;
   c.ranking = rankRace(c.race!);
   c.unmasked = c.unmaskings === 0 ? [] : c.ranking.slice(-c.unmaskings).map((r) => r.guest);
+  const predicted = s.predictions.find((p) => p.round === s.round);
+  if (predicted) predicted.unmasked = [...c.unmasked];
   for (const g of s.guests) if (c.unmasked.includes(g.id)) Object.assign(g, { unmaskedIn: s.round, favours: 0 });
   for (const room of s.rooms) {
     const leaving = room.members.filter((m) => c.unmasked.includes(m));
@@ -332,13 +375,14 @@ function unmask(s: GameState, at: number): void {
     room.members = room.members.filter((m) => !leaving.includes(m));
     room.unmasked = [...(room.unmasked ?? []), ...leaving];
   }
+  if (s.along) s.along.done = true;
   s.phase = "unmasking";
   s.deadline = at + UNMASKING_MS;
 }
 
 /** After the unmasking: round N+1's Mingle, or the Last Dance once the rounds are done. */
 function nextRound(s: GameState, at: number): GameState {
-  if (s.round >= s.rounds) return { ...s, phase: "lastDance", deadline: null };
+  if (s.round >= s.rounds) return { ...s, phase: "lastDance", deadline: null, along: null };
   const next = drawDance({ ...s, round: s.round + 1 });
   if (!next) throw new Error("the library has no Dance for the guests left");
   return openMingle(next, at);
@@ -355,7 +399,9 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
   const me = state.guests.find((g) => g.id === guest);
   if (!me || state.host === null) return null;
   const guests = state.guests.map(({ id, name, mask, unmaskedIn }) => ({ id, name, mask: { ...mask }, unmasked: unmaskedIn !== undefined }));
-  const seated = { you: guest, host: state.host, guests, rooms: state.rooms.map((r) => ({ id: r.id, members: [...r.members] })), chats: talkSheet(state, guest) };
+  const ghost = me.unmaskedIn !== undefined;
+  const seated = { you: guest, host: state.host, guests, rooms: state.rooms.map((r) => ({ id: r.id, members: [...r.members] })), chats: talkSheet(state, guest),
+    along: ghost && state.along ? alongView(state.along, guest) : null, predictions: ghost ? predictionsView(state) : null };
   const def = state.danceDef;
   const announcement = def && { name: def.name, encore: state.danceEncore, rulesSummary: def.rulesSummary, workedExample: def.workedExample, masks: !!def.masks };
   const publicFavours = () => Object.fromEntries(remaining(state).map((g) => [g.id, g.favours]));
@@ -428,7 +474,7 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
         favours: publicFavours(),
       };
     case "lastDance":
-      return { ...seated, phase: "lastDance", finalists: remaining(state).map((g) => g.id), favours: publicFavours() };
+      return { ...seated, phase: "lastDance", finalists: remaining(state).map((g) => g.id), favours: publicFavours(), reveal: predictionsReveal(state) };
     case "foyer":
       return { ...seated, phase: "foyer", format: state.format, canStart: guest === state.host && fitsFormat(state), canRemove: guest === state.host };
   }
@@ -468,5 +514,6 @@ function talkSheet(state: GameState, guest: GuestId): ChatAccess {
 
 /** When the next `tick` is due, or null when nothing is waiting on the clock. */
 export function nextDeadline(state: GameState): number | null {
-  return state.deadline;
+  const own = alongDeadline(state.along);
+  return own === null ? state.deadline : state.deadline === null ? own : Math.min(own, state.deadline);
 }
