@@ -1,0 +1,14 @@
+{
+  "name": "two-faced",
+  "main": "src/server/worker.ts",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "dist/client",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/parties/*"]
+  },
+  "durable_objects": { "bindings": [{ "name": "Game", "class_name": "Game" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Game"] }],
+  "vars": { "BUILD_ID": "dev" }
+}

@@ -1,0 +1,8 @@
+:root { --ink: #12121a; --paper: #efe6d2; --gold: #d6a823; --silver: #c3c9d6; --red: #c8352c; --sapphire: #2f60cc; --emerald: #1d9a6b; --onyx: #45454f; }
+body { margin: 0; background: var(--ink); color: var(--paper); font-family: Inter, system-ui, sans-serif; }
+main { max-width: 28rem; margin: 0 auto; padding: 2rem 1rem; }
+h1 { font-family: "Bodoni Moda", serif; font-weight: 500; }
+input, button { font: inherit; padding: .6rem .8rem; margin: .25rem 0; border: 1px solid var(--gold); background: transparent; color: var(--paper); }
+button { cursor: pointer; } button:disabled { opacity: .4; cursor: default; }
+ul { list-style: none; padding: 0; } li { display: flex; align-items: center; gap: .75rem; padding: .4rem 0; border-bottom: 1px solid #ffffff22; }
+.error { color: var(--red); }
