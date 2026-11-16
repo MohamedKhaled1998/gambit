@@ -140,8 +140,8 @@ describe("the Foyer", () => {
 describe("leaks", () => {
   it("never show guest A anything that changes only with guest B's private data", () => {
     expectNoLeak();
-  }, 30_000);
+  });
   it("the harness notices when public data changes", () => {
     expect(() => expectNoLeak({ extra: [{ name: "name", set: (g, v) => ({ ...g, name: String(v) || "x" }) }] })).toThrow();
-  }, 30_000);
+  });
 });

@@ -70,24 +70,17 @@ export class Client {
 
 export type Seated = { client: Client; guest: string; token: string };
 
-/**
- * A started game of `n` guests, every one connected; the Host is first. An Unmasking vote can open round 1, whose
- * ballot is 25 real seconds; these tests are about the Mingle, so a game that opens with one is set aside for another.
- */
+/** A started game of `n` guests, every one connected; the Host is first. */
 export async function startedGame(n: number): Promise<{ code: string; guests: Seated[] }> {
-  for (;;) {
-    const grant = await createGameOverHttp("Ana");
-    const host = await Client.connect(grant.code, grant.token);
-    await host.until(() => host.views().length > 0);
-    const guests: Seated[] = [{ client: host, guest: grant.guest, token: grant.token }];
-    for (let i = 1; i < n; i++) guests.push(await (await Client.connect(grant.code)).join(grant.code, `Guest${i}`));
-    await host.until(() => host.lastView()?.guests.length === n);
-    host.send({ type: "action", id: "start", action: { type: "start" } });
-    await host.until(() => host.lastView()?.phase === "mingle" || host.lastView()?.phase === "vote");
-    if (host.lastView()?.phase === "vote") continue;
-    await Promise.all(guests.map((g) => g.client.until(() => g.client.lastView()?.phase === "mingle")));
-    return { code: grant.code, guests };
-  }
+  const grant = await createGameOverHttp("Ana");
+  const host = await Client.connect(grant.code, grant.token);
+  await host.until(() => host.views().length > 0);
+  const guests: Seated[] = [{ client: host, guest: grant.guest, token: grant.token }];
+  for (let i = 1; i < n; i++) guests.push(await (await Client.connect(grant.code)).join(grant.code, `Guest${i}`));
+  await host.until(() => host.lastView()?.guests.length === n);
+  host.send({ type: "action", id: "start", action: { type: "start" } });
+  await Promise.all(guests.map((g) => g.client.until(() => g.client.lastView()?.phase === "mingle")));
+  return { code: grant.code, guests };
 }
 
 export const chatMessages = (c: Client, chat?: string) =>

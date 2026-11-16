@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { LIBRARY } from "../../src/content/library";
 import { DANCE_PAYOUTS, type GameState, type MatchDef } from "../../src/shared/types";
 import { generateProblems } from "../../src/engine/problems";
-import { startPick } from "../../src/engine/pick";
 import { startRace } from "../../src/engine/race";
 import { mixedPlayer, playDance, playMatch, started } from "./sim";
 
@@ -51,20 +50,6 @@ describe("library entry checks", () => {
         });
       }
 
-      if (m.guestRange.cellar && m.type === "uniquePick") it("plays as a Cellar game to a strict ranking with simulated guests across its Cellar range", () => {
-        const [lo, hi] = m.guestRange.cellar!;
-        for (let n = lo; n <= hi; n++) {
-          const game = started(Math.max(n + 1, 4), 700 + n);
-          const down = game.guests.slice(0, n).map((g) => g.id);
-          const [pick] = startPick(1, m, down, 0, m.steps.cellar!);
-          const s: GameState = { ...game, phase: "cellar", deadline: pick.deadline, cellar: { def: m, encore: false, guests: down, unmaskings: 1, race: null, pick, ranking: null, unmasked: [] } };
-          const done = playMatch(s, mixedPlayer);
-          expect(done.phase).toBe("unmasking");
-          expect(new Set(done.cellar!.ranking!.map((r) => r.guest)).size).toBe(n);
-          expect(done.cellar!.unmasked).toHaveLength(1);
-        }
-      });
-
       if (m.guestRange.cellar && m.type === "race") it("plays as a Cellar game to a strict ranking with simulated guests across its Cellar range", () => {
         const [lo, hi] = m.guestRange.cellar!;
         for (let n = lo; n <= hi; n++) {
@@ -72,7 +57,7 @@ describe("library entry checks", () => {
           const game = started(Math.max(n + 1, 4), 700 + n);
           const down = game.guests.slice(0, n).map((g) => g.id);
           const [race] = startRace(1, m, down, 0, m.steps.cellar!);
-          const s: GameState = { ...game, phase: "cellar", deadline: race.deadline, cellar: { def: m, encore: false, guests: down, unmaskings: 1, race, pick: null, ranking: null, unmasked: [] } };
+          const s: GameState = { ...game, phase: "cellar", deadline: race.deadline, cellar: { def: m, encore: false, guests: down, unmaskings: 1, race, ranking: null, unmasked: [] } };
           const done = playMatch(s, mixedPlayer);
           expect(done.phase).toBe("unmasking");
           expect(new Set(done.cellar!.ranking!.map((r) => r.guest)).size).toBe(n);

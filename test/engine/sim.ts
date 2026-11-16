@@ -1,5 +1,5 @@
 import { apply, newGame, nextDeadline, viewFor } from "../../src/engine/game";
-import { MINGLE_MS, VOTE_BALLOT_MS, type Action, type GameState, type GuestId, type StepView } from "../../src/shared/types";
+import type { Action, GameState, GuestId, StepView } from "../../src/shared/types";
 
 export function must(state: GameState, action: Action, now = 0): GameState {
   const r = apply(state, action, now);
@@ -13,37 +13,13 @@ export function foyerWith(n: number, seed = 42): GameState {
   return s;
 }
 
-/** A game in round 1's Mingle, without an Unmasking vote at its start (see `withoutVote`); `startedRaw` keeps whatever the seed drew. */
-export const startedRaw = (n: number, seed = 42, at = 0): GameState => must(foyerWith(n, seed), { type: "start", guest: "g0" }, at);
-export const started = (n: number, seed = 42, at = 0): GameState => {
-  const s = startedRaw(n, seed, at);
-  return s.phase === "vote" ? withoutVote(s) : s;
-};
+export const started = (n: number, seed = 42, at = 0): GameState => must(foyerWith(n, seed), { type: "start", guest: "g0" }, at);
 
 /** Ticks to the next deadline, as the Durable Object's alarm does. */
-export function tickOnce(s: GameState): GameState {
+export function tickToDeadline(s: GameState): GameState {
   const d = nextDeadline(s);
   if (d === null) throw new Error("no deadline");
   return must(s, { type: "tick" }, d);
-}
-
-/**
- * Takes back an Unmasking vote that just opened, as if the round had held none: the Mingle or the Dance goes on
- * from where the vote found it. For the tests that aren't about the vote, whose round counts and favours it would change.
- */
-export function withoutVote(s: GameState): GameState {
-  const v = s.vote!;
-  const next = { ...s, vote: null, votePlan: null, voteCount: null };
-  if (v.during === "dance") return { ...next, phase: "dance", deadline: (s.pledge ?? s.auction ?? s.pick ?? s.match!).deadline };
-  const opened = v.deadline - VOTE_BALLOT_MS;
-  const mingleStandings = Object.fromEntries(s.guests.filter((g) => g.unmaskedIn === undefined).map((g) => [g.id, g.favours]));
-  return { ...next, phase: "mingle", deadline: opened + MINGLE_MS, mingleStandings };
-}
-
-/** Ticks to the next deadline; an Unmasking vote that opens is taken back (see `withoutVote`). */
-export function tickToDeadline(s: GameState): GameState {
-  s = tickOnce(s);
-  return s.phase === "vote" ? withoutVote(s) : s;
 }
 
 /** Moves to the start of the Dance. */
@@ -65,24 +41,14 @@ function playAuction(s: GameState): GameState {
   return s;
 }
 
-/** Plays a Group target Dance to its end: a guest-dependent pledge each step, and every third guest pockets. */
-function playPledge(s: GameState): GameState {
+/** Plays a Bluff Dance to its end: guest-dependent claims, each guest calling the next one on odd steps. */
+function playBluff(s: GameState): GameState {
   while (s.phase === "dance") {
-    const p = s.pledge!;
-    const act = (id: string): Action => (p.stage === "pledge" ? { type: "pledge", guest: id, amount: (Number(id.slice(1)) * 3 + p.step) % 11 } : { type: "reckon", guest: id, choice: Number(id.slice(1)) % 3 === 0 ? "pocket" : "share" });
-    if (p.stage === "pledge" || p.stage === "reckon") for (const id of Object.keys(p.points)) if (s.phase === "dance" && s.pledge!.stage === p.stage) s = must(s, act(id), p.stepStartedAt + 1000);
-    s = tickToDeadline(s);
-  }
-  return s;
-}
-
-/** Plays a Unique pick match (Dance or Cellar game) to its end: a guest-dependent pick each step. */
-function playPick(s: GameState): GameState {
-  const phase = s.phase;
-  const live = (x: GameState) => (phase === "dance" ? x.pick : x.cellar?.pick) ?? null;
-  while (s.phase === phase) {
-    const p = live(s)!;
-    if (p.stage === "pick") for (const id of Object.keys(p.points)) if (s.phase === phase && live(s)!.stage === "pick") s = must(s, { type: "pick", guest: id, number: 1 + ((Number(id.slice(1)) * 5 + p.step * 2) % p.range) }, p.stepStartedAt + 1000);
+    const b = s.bluff!;
+    const ids = Object.keys(b.points);
+    const t = b.stepStartedAt + 1000;
+    if (b.stage === "claim") for (const [i, id] of ids.entries()) s = must(s, { type: "claim", guest: id, value: ((i + b.step * 2) % 9) + 1 }, t);
+    if (s.bluff!.stage === "call") for (const [i, id] of ids.entries()) s = must(s, { type: "call", guest: id, target: b.step % 2 ? ids[(i + 1) % ids.length]! : null }, t);
     s = tickToDeadline(s);
   }
   return s;
@@ -94,9 +60,8 @@ const players = (s: GameState) => Object.keys((s.phase === "dance" ? s.match! : 
 /** Plays the running match (Dance or Cellar game) to its end with scripted guests. */
 export function playMatch(s: GameState, play: Player): GameState {
   const phase = s.phase;
+  if (phase === "dance" && s.bluff) return playBluff(s);
   if (phase === "dance" && s.auction) return playAuction(s);
-  if (phase === "dance" && s.pledge) return playPledge(s);
-  if ((phase === "dance" && s.pick) || (phase === "cellar" && s.cellar!.pick)) return playPick(s);
   while (s.phase === phase) {
     const race = phase === "dance" ? s.match! : s.cellar!.race!;
     if (race.stage === "answer") {

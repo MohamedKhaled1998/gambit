@@ -44,4 +44,3 @@ ul { list-style: none; padding: 0; } li { display: flex; align-items: center; ga
 .stage { transition: filter 2.4s ease-in, opacity 2.4s ease-in; }
 .stage.lights-out { filter: brightness(.35); }
 .stage.lights-out .tile-grid button { background: #00000066; }
-.dimmed { background: rgba(0,0,0,.55); border-radius: 12px; padding: 1rem; transition: background 2.4s; }

@@ -46,11 +46,6 @@ export const DANCE_MS = 5 * 60_000;
 export const SENT_DOWN_MS = 60_000;
 export const CELLAR_MS = 3 * 60_000;
 export const UNMASKING_MS = 60_000;
-/** An Unmasking vote: the secret ballot, then the reveal of every ballot. */
-export const VOTE_BALLOT_MS = 25_000;
-export const VOTE_REVEAL_MS = 10_000;
-/** Favours every Greed voter is paid at the reveal. */
-export const GREED_REWARD = 2;
 /** A quick game's rounds, before the Last Dance. */
 export const QUICK_ROUNDS = 3;
 
@@ -128,109 +123,53 @@ export interface SealedBidMatchDef {
   oncePerGame?: boolean;
   masks?: boolean;
 }
-/** A match on the Group target match type: guests pledge to one pot, then each shares or pockets. Data only. */
-export interface GroupTargetMatchDef {
+/** A match on the Bluff match type: a secret card, a public claim, secret calls. Data only. */
+export interface BluffMatchDef {
   id: string;
   name: string;
-  type: "groupTarget";
-  rulesSummary: string;
-  workedExample: string;
-  guestRange: { dance: [number, number] | null; cellar: [number, number] | null };
-  /** Pledge steps plus the reckoning. */
-  steps: { dance: number | null; cellar: number | null };
-  pledgeSteps: number;
-  /** Points each guest is handed at every pledge step. */
-  pointsPerStep: number;
-  /** The pot must reach this × guests. */
-  targetPerGuest: number;
-  /** Favours for everyone when the pot reached the target and nobody pockets. */
-  allShareAward: number;
-  /** Favours for a lone pocket when the pot reached the target. */
-  lonePocketAward: number;
-  studySeconds: number;
-  /** The pledge phase, and the reckoning's choice phase. */
-  answerSeconds: number;
-  /** Pledge, then the reveal. */
-  stepSeconds: number;
-  preludeSeconds: number;
-  buyRate: number;
-  tieBreak: ("points" | "draw")[];
-  oncePerGame?: boolean;
-  masks?: boolean;
-}
-/** A match on the Unique pick match type: every guest secretly picks a number a step; numbers nobody else picked score. Data only. */
-export interface UniquePickMatchDef {
-  id: string;
-  name: string;
-  type: "uniquePick";
+  type: "bluff";
   rulesSummary: string;
   workedExample: string;
   guestRange: { dance: [number, number] | null; cellar: [number, number] | null };
   steps: { dance: number | null; cellar: number | null };
-  /** The highest number to pick, by guest count: the first band whose `upTo` reaches the guests. */
-  rangeBands: { upTo: number; max: number }[];
-  /** Extra points for the highest unique number. */
-  topBonus: number;
+  /** Cards and claims run from 1 to this. */
+  maxCard: number;
+  /** Points a called guest who told the truth earns for each caller. */
+  honestBonus: number;
   studySeconds: number;
-  /** The pick phase. */
+  /** The claim phase; the call phase is as long. */
   answerSeconds: number;
-  /** Pick, then the reveal. */
+  /** Claim, call, then the reveal. */
   stepSeconds: number;
   preludeSeconds: number;
   buyRate: number;
-  tieBreak: ("points" | "uniques" | "draw")[];
+  tieBreak: ("points" | "calls" | "draw")[];
   oncePerGame?: boolean;
   masks?: boolean;
 }
-export type MatchDef = RaceMatchDef | SealedBidMatchDef | GroupTargetMatchDef | UniquePickMatchDef;
+export type MatchDef = RaceMatchDef | SealedBidMatchDef | BluffMatchDef;
 
-/** A Unique pick match running: picks hidden until the step's reveal. */
-export interface PickState {
-  def: UniquePickMatchDef;
-  /** Highest number a guest may pick. */
-  range: number;
-  total: number;
+/** A Bluff match running: one secret card a guest a step, hidden until a call reveals it. */
+export interface BluffState {
+  def: BluffMatchDef;
+  steps: number;
   step: number;
-  stage: "pick" | "reveal";
+  stage: "claim" | "call" | "reveal";
   stepStartedAt: number;
-  pickDeadline: number;
+  claimDeadline: number;
+  callDeadline: number;
   /** End of the current stage. */
   deadline: number;
   drawKeys: Record<GuestId, number>;
-  /** This step's picks; hidden until the reveal. */
-  picks: Record<GuestId, number>;
+  /** Every step's secret cards, dealt up front from the seed. */
+  cards: Record<GuestId, number>[];
+  /** This step's claims; public once the claim phase closes. */
+  claims: Record<GuestId, number>;
+  /** This step's calls: caller to the guest called, null for no one; secret until the reveal. */
+  calls: Record<GuestId, GuestId | null>;
   points: Record<GuestId, number>;
-  /** Unique picks so far. */
-  uniques: Record<GuestId, number>;
-  /** The step just revealed: every pick, and what each guest scored. */
-  last: { picks: { guest: GuestId; number: number; unique: boolean }[]; scored: Record<GuestId, number> } | null;
-}
-
-export type ReckoningChoice = "share" | "pocket";
-
-/** A Group target match running. Pledges, points and choices stay hidden until the final reveal. */
-export interface PledgeState {
-  def: GroupTargetMatchDef;
-  /** 0 to `pledgeSteps - 1` are pledge steps; `pledgeSteps` is the reckoning. */
-  step: number;
-  stage: "pledge" | "reveal" | "reckon" | "final";
-  stepStartedAt: number;
-  /** End of the phase where guests act. */
-  actDeadline: number;
-  /** End of the current stage. */
-  deadline: number;
-  drawKeys: Record<GuestId, number>;
-  /** Points a guest may pledge at the open step: handed points plus any bought. */
-  stock: Record<GuestId, number>;
-  /** This step's pledges, until the step's reveal. */
-  current: Record<GuestId, number>;
-  /** Pledges of the steps revealed, per guest. */
-  pledges: Record<GuestId, number[]>;
-  /** Kept points. */
-  points: Record<GuestId, number>;
-  choices: Record<GuestId, ReckoningChoice>;
-  /** Favours awarded per guest, set at the final reveal. */
-  award: Record<GuestId, number> | null;
+  /** Calls that caught a lie, so far. */
+  caught: Record<GuestId, number>;
 }
 
 /** A Sealed bid match running: one lot a step, bids hidden until the reveal. */
@@ -311,8 +250,8 @@ export interface RankingEntry {
   time: number;
   /** Lots won, in a Sealed bid match. */
   lots?: number;
-  /** Unique picks, in a Unique pick match. */
-  uniques?: number;
+  /** Correct calls, in a Bluff match. */
+  calls?: number;
   /** True when the draw, not points or time, put this guest ahead of or behind a neighbour. */
   drawn: boolean;
 }
@@ -330,10 +269,8 @@ export interface CellarState {
   guests: GuestId[];
   /** How many this round's Cellar game unmasks; 0 in a warm-up round. */
   unmaskings: number;
-  /** Set when the Cellar game starts, if it is on the Race match type. */
+  /** Set when the Cellar game starts. */
   race: RaceState | null;
-  /** Set when the Cellar game starts, if it is on the Unique pick match type. */
-  pick: PickState | null;
   /** Set when the Cellar game ends. */
   ranking: RankingEntry[] | null;
   unmasked: GuestId[];
@@ -362,32 +299,8 @@ export interface Room {
   unmasked?: GuestId[];
 }
 
-export type VoteChoice = "mercy" | "greed";
-
-/** An Unmasking vote running. Ballots stay hidden until the reveal. */
-export interface VoteState {
-  /** Whether it came at the start of the round or paused the Dance between steps. */
-  during: "start" | "dance";
-  /** The lower count, and one more. */
-  mercy: number;
-  greed: number;
-  stage: "ballot" | "reveal";
-  deadline: number;
-  ballots: Record<GuestId, VoteChoice>;
-  /** Set at the reveal: every remaining guest's ballot (an absent guest's counts as Mercy), and the count chosen. */
-  result: { ballots: { guest: GuestId; choice: VoteChoice; cast: boolean }[]; mercyWon: boolean; count: number } | null;
-}
-
-/** A vote the round's seed has planned for its Dance: after which step's reveal, and its counts. */
-export interface VotePlan {
-  /** Null until the Dance starts and the boundary is drawn. */
-  afterStep: number | null;
-  mercy: number;
-  greed: number;
-}
-
 export interface GameState {
-  phase: "foyer" | "mingle" | "dance" | "vote" | "sentDown" | "cellar" | "unmasking" | "lastDance";
+  phase: "foyer" | "mingle" | "dance" | "sentDown" | "cellar" | "unmasking" | "lastDance";
   format: Format;
   /** Seed state for every random draw; advances as draws are made. */
   seed: number;
@@ -406,20 +319,10 @@ export interface GameState {
   match: RaceState | null;
   /** The Dance when it is on the Sealed bid match type; `match` is then null. */
   auction: AuctionState | null;
-  /** The Dance when it is on the Group target match type. */
-  pledge: PledgeState | null;
-  /** The Dance when it is on the Unique pick match type. */
-  pick: PickState | null;
+  /** The Dance when it is on the Bluff match type; `match` is then null. */
+  bluff: BluffState | null;
   danceResult: DanceResult | null;
   cellar: CellarState | null;
-  /** The Unmasking vote running, at the start of a round or pausing its Dance. */
-  vote: VoteState | null;
-  /** The vote planned for this round's Dance, if any. */
-  votePlan: VotePlan | null;
-  /** Whether a vote has been held this game. */
-  voteHeld: boolean;
-  /** How many this round unmasks, once a vote has chosen it; null otherwise. */
-  voteCount: number | null;
   /** Every gift given this game. */
   gifts: Gift[];
   /** Each remaining guest's total as the current Mingle began: the standings shown during it. */
@@ -436,10 +339,8 @@ export type Action =
   | { type: "start"; guest: GuestId }
   | { type: "answer"; guest: GuestId; position: number }
   | { type: "bid"; guest: GuestId; amount: number }
-  | { type: "pledge"; guest: GuestId; amount: number }
-  | { type: "pick"; guest: GuestId; number: number }
-  | { type: "reckon"; guest: GuestId; choice: ReckoningChoice }
-  | { type: "vote"; guest: GuestId; choice: VoteChoice }
+  | { type: "claim"; guest: GuestId; value: number }
+  | { type: "call"; guest: GuestId; target: GuestId | null }
   | { type: "buyPoints"; guest: GuestId; favours: number }
   | { type: "gift"; guest: GuestId; to: GuestId; favours: number }
   | { type: "openRoom"; guest: GuestId; members: GuestId[] }
@@ -464,16 +365,12 @@ export type Rejection =
   | "already answered"
   | "already bid"
   | "no auction is running"
-  | "no pledge is running"
-  | "no pick is running"
-  | "no vote is running"
-  | "already voted"
-  | "picks are whole numbers in the range"
-  | "already pledged"
-  | "already picked"
-  | "already chose"
-  | "pledges are whole points up to your stock"
-  | "wait for the reckoning"
+  | "no toast is running"
+  | "wait for the call phase"
+  | "already claimed"
+  | "already called"
+  | "claims are whole values from 1 to the top card"
+  | "you can't call yourself"
   | "bids are whole points up to what you hold"
   | "no such choice"
   | "not enough favours"
@@ -541,42 +438,27 @@ export interface AuctionView {
   reveal: { bids: { guest: GuestId; amount: number }[]; winner: GuestId | null; price: number } | null;
 }
 
-/** A Unique pick step as one guest sees it. */
-export interface PickView {
+/** A Bluff step as one guest sees it. */
+export interface BluffView {
   index: number;
   total: number;
-  stage: "pick" | "reveal";
+  stage: "claim" | "call" | "reveal";
   startedAt: number;
-  pickDeadline: number;
+  claimDeadline: number;
+  callDeadline: number;
   deadline: number;
-  /** Numbers run 1 to this. */
-  range: number;
-  /** Your own pick, if made; never anyone else's before the reveal. */
-  yourPick: number | null;
-  /** Only once the step is revealed: every pick with names, highest number first, and what each guest scored. */
-  reveal: { picks: { guest: GuestId; number: number; unique: boolean }[]; scored: Record<GuestId, number> } | null;
-}
-
-/** A Group target step as one guest sees it. */
-export interface PledgeView {
-  index: number;
-  total: number;
-  stage: "pledge" | "reveal" | "reckon" | "final";
-  startedAt: number;
-  actDeadline: number;
-  deadline: number;
-  /** The most you can pledge now. */
-  stock: number;
-  /** Your own pledge to the open step, if made. */
-  yourPledge: number | null;
-  /** Your own kept points. */
-  kept: number;
-  /** The pot after the steps revealed so far: the only shared number before the final reveal. */
-  pot: number;
-  target: number;
-  yourChoice: ReckoningChoice | null;
-  /** Only at the final reveal: every pledge and choice with names, and the award. */
-  final: { pledges: { guest: GuestId; amounts: number[] }[]; choices: Record<GuestId, ReckoningChoice>; award: Record<GuestId, number>; reached: boolean } | null;
+  /** The highest card and claim. */
+  maxCard: number;
+  /** Your own secret card; nobody else's. */
+  yourCard: number;
+  yourClaim: number | null;
+  /** Everyone's claims, once the claim phase has closed; null before. A guest who didn't claim is absent. */
+  claims: Record<GuestId, number> | null;
+  /** Who you called: null for no one, or while you haven't called (see `called`). */
+  yourCall: GuestId | null;
+  called: boolean;
+  /** Only at the reveal: who called whom, and the card of each called guest; uncalled cards never appear. */
+  reveal: { calls: { caller: GuestId; target: GuestId }[]; cards: Record<GuestId, number> } | null;
 }
 
 export interface Announcement {
@@ -619,36 +501,14 @@ export type GuestView =
       favours: number;
       announcement: Announcement;
       buyRate: number;
-      /** Null for a guest who isn't playing (unmasked), and in a Sealed bid or Group target match. */
+      /** Null for a guest who isn't playing (unmasked), and in a Sealed bid match. */
       step: StepView | null;
       /** The Sealed bid step; null in other matches and for a guest who isn't playing. */
       auction: AuctionView | null;
-      /** The Group target step; null in other matches and for a guest who isn't playing. */
-      pledge: PledgeView | null;
-      /** The Unique pick step; null in other matches and for a guest who isn't playing. */
-      pick: PickView | null;
+      /** The Bluff step; null in other matches and for a guest who isn't playing. */
+      bluff: BluffView | null;
       /** Public running ranking; bought points show at once. */
       ranking: RankingEntry[];
-    })
-  | (Seated & {
-      phase: "vote";
-      round: number;
-      during: "start" | "dance";
-      stage: "ballot" | "reveal";
-      /** The stage dims while a vote runs. */
-      dim: true;
-      deadline: number;
-      /** Your own live balance; a Greed voter's reward is in it from the reveal. */
-      favours: number;
-      /** Mercy's count and Greed's count: the round's unmasking count is known from here. */
-      mercy: number;
-      greed: number;
-      /** False for an unmasked guest, who watches. */
-      canVote: boolean;
-      /** Your own ballot, if cast; never anyone else's before the reveal. */
-      yourBallot: VoteChoice | null;
-      /** Only at the reveal: every ballot with names, and the count chosen. */
-      reveal: { ballots: { guest: GuestId; choice: VoteChoice; cast: boolean }[]; mercyWon: boolean; count: number } | null;
     })
   | (Seated & {
       phase: "sentDown";
@@ -676,8 +536,6 @@ export type GuestView =
       buyRate: number;
       /** Only for a guest in the Cellar: the private problem. Free guests watch the ranking alone. */
       step: StepView | null;
-      /** The Unique pick step, when the Cellar game is one. */
-      pick: PickView | null;
       ranking: RankingEntry[];
     })
   | (Seated & {
@@ -736,16 +594,14 @@ export type ClientAction =
   | { type: "start" }
   | { type: "answer"; position: number }
   | { type: "bid"; amount: number }
-  | { type: "pledge"; amount: number }
-  | { type: "pick"; number: number }
-  | { type: "reckon"; choice: ReckoningChoice }
-  | { type: "vote"; choice: VoteChoice }
+  | { type: "claim"; value: number }
+  | { type: "call"; target: GuestId | null }
   | { type: "buyPoints"; favours: number }
   | { type: "gift"; to: GuestId; favours: number }
   | { type: "openRoom"; members: GuestId[] }
   | { type: "leaveRoom"; room: string };
 
-const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "bid", "pledge", "pick", "reckon", "vote", "buyPoints", "gift", "openRoom", "leaveRoom"] satisfies ClientAction["type"][];
+const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "bid", "claim", "call", "buyPoints", "gift", "openRoom", "leaveRoom"] satisfies ClientAction["type"][];
 
 /** True only for the actions a client may send; never `tick`, which only the alarm sends. */
 export function isClientAction(value: unknown): value is ClientAction {

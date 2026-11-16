@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MINGLE_MS, SENT_DOWN_MS, UNMASKING_MS, VOTE_BALLOT_MS, VOTE_REVEAL_MS, type ClientAction, type GuestView, type StepView, type AuctionView, type PledgeView, type PickView, type PublicGuest, type RankingEntry } from "../shared/types";
+import { MINGLE_MS, SENT_DOWN_MS, UNMASKING_MS, type ClientAction, type GuestView, type StepView, type AuctionView, type BluffView, type PublicGuest, type RankingEntry } from "../shared/types";
 import { ColourStrip, MaskIcon, maskLabel } from "./mask";
 import { Talk, type TalkLink } from "./talk";
 
@@ -142,89 +142,46 @@ function BidPanel({ auction, guests, you, favours, buyRate, now, act }: { auctio
   );
 }
 
-/** The choice grid and reveal of a Unique pick step. */
-function PickPanel({ pick, guests, you, favours, buyRate, now, act }: { pick: PickView; guests: PublicGuest[]; you: string; favours: number; buyRate: number; now: number; act: Act }) {
+/** The card grid, claim entry, choice grid and reveal of a Bluff step. */
+function ToastPanel({ bluff, guests, you, favours, buyRate, now, act }: { bluff: BluffView; guests: PublicGuest[]; you: string; favours: number; buyRate: number; now: number; act: Act }) {
+  const [value, setValue] = useState(1);
   const [spend, setSpend] = useState(1);
   const name = (id: string) => guests.find((g) => g.id === id)!.name;
-  const r = pick.reveal;
+  const others = guests.filter((g) => !g.unmasked && g.id !== you);
+  const length = bluff.stage === "claim" ? bluff.claimDeadline - bluff.startedAt : bluff.stage === "call" ? bluff.callDeadline - bluff.claimDeadline : 5000;
+  const r = bluff.reveal;
   return (
     <>
-      <p>Step {pick.index + 1} of {pick.total} · you hold {favours} favours</p>
-      <Candle deadline={pick.deadline} length={pick.stage === "pick" ? pick.pickDeadline - pick.startedAt : 5000} now={now} />
-      {pick.stage === "pick" ? (
-        <div className="choices tile-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
-          {Array.from({ length: pick.range }, (_, i) => i + 1).map((n) => (
-            <button key={n} className={n === pick.yourPick ? "picked" : ""} disabled={pick.yourPick !== null} onClick={() => act({ type: "pick", number: n })}>{n}</button>
-          ))}
-        </div>
-      ) : (
+      <p>Toast {bluff.index + 1} of {bluff.total} · you hold {favours} favours</p>
+      <Candle deadline={bluff.deadline} length={length} now={now} />
+      <p className="prompt">Your card: {bluff.yourCard}</p>
+      {bluff.stage === "claim" &&
+        (bluff.yourClaim === null ? (
+          <p>
+            <input type="number" min={1} max={bluff.maxCard} value={value} onChange={(e) => setValue(Math.max(1, Math.floor(Number(e.target.value))))} style={{ width: "4rem" }} />
+            <button disabled={value > bluff.maxCard} onClick={() => act({ type: "claim", value })}>Raise your toast</button>
+          </p>
+        ) : (
+          <p>You toasted {bluff.yourClaim}. The others are still raising theirs.</p>
+        ))}
+      {bluff.stage !== "claim" && (
         <ol className="ranking">
-          {r!.picks.map((x) => <li key={x.guest} className={x.guest === you ? "me" : ""}><span>{name(x.guest)}</span><span>{x.number}</span><span>{x.unique ? `+${r!.scored[x.guest]}` : "clash"}</span></li>)}
+          {guests.filter((g) => !g.unmasked && bluff.claims && g.id in bluff.claims || g.id === you).map((g) => (
+            <li key={g.id} className={g.id === you ? "me" : ""}>
+              <span>{g.name}</span><span>{bluff.claims?.[g.id] ?? "no claim"}</span>
+              {r && g.id in r.cards && <span>held {r.cards[g.id]}</span>}
+              {bluff.stage === "call" && g.id !== you && !bluff.called && <button onClick={() => act({ type: "call", target: g.id })}>Call a liar</button>}
+            </li>
+          ))}
         </ol>
       )}
+      {bluff.stage === "call" && (bluff.called ? <p>{bluff.yourCall ? `You called ${name(bluff.yourCall)}.` : "You called no one."}</p> : others.length > 0 && <p><button onClick={() => act({ type: "call", target: null })}>Call no one</button></p>)}
+      {r && <p>{r.calls.length ? r.calls.map((c) => `${name(c.caller)} called ${name(c.target)}`).join("; ") + "." : "Nobody was called."}</p>}
       <p>
         Buy points ({buyRate} each):{" "}
         <input type="number" min={1} max={favours} value={spend} onChange={(e) => setSpend(Math.max(1, Math.floor(Number(e.target.value))))} style={{ width: "4rem" }} />
         <button disabled={favours < 1 || spend > favours} onClick={() => act({ type: "buyPoints", favours: spend })}>Spend favours</button>
       </p>
-    </>
-  );
-}
-
-/** The pledge entry, reckoning choice and reveal screens of a Group target step. */
-function PledgePanel({ pledge, guests, you, favours, buyRate, now, act }: { pledge: PledgeView; guests: PublicGuest[]; you: string; favours: number; buyRate: number; now: number; act: Act }) {
-  const [amount, setAmount] = useState(0);
-  const [spend, setSpend] = useState(1);
-  const name = (id: string) => guests.find((g) => g.id === id)!.name;
-  const f = pledge.final;
-  const reckoning = pledge.index >= pledge.total - 1;
-  return (
-    <>
-      <p>{reckoning ? "The reckoning" : `Pledge ${pledge.index + 1} of ${pledge.total - 1}`} · you keep {pledge.kept} points and hold {favours} favours</p>
-      <Candle deadline={pledge.deadline} length={pledge.deadline - pledge.startedAt} now={now} />
-      <p className="prompt">The pot: {pledge.pot} of {pledge.target}</p>
-      {pledge.stage === "pledge" &&
-        (pledge.yourPledge === null ? (
-          <p>
-            You are handed {pledge.stock} points.{" "}
-            <input type="number" min={0} max={pledge.stock} value={amount} onChange={(e) => setAmount(Math.max(0, Math.floor(Number(e.target.value))))} style={{ width: "5rem" }} />
-            <button disabled={amount > pledge.stock} onClick={() => act({ type: "pledge", amount })}>Pledge in secret</button>
-          </p>
-        ) : (
-          <p>You pledged {pledge.yourPledge}. The others are still pledging.</p>
-        ))}
-      {pledge.stage === "reveal" && <p>You pledged {pledge.yourPledge ?? 0}. The pot now holds {pledge.pot}.</p>}
-      {pledge.stage === "reckon" &&
-        (pledge.yourChoice === null ? (
-          <p>
-            <button onClick={() => act({ type: "reckon", choice: "share" })}>Share</button>
-            <button onClick={() => act({ type: "reckon", choice: "pocket" })}>Pocket</button>
-          </p>
-        ) : (
-          <p>You chose to {pledge.yourChoice}. The others are still choosing.</p>
-        ))}
-      {f && (
-        <>
-          <ol className="ranking">
-            {f.pledges.map((p) => (
-              <li key={p.guest} className={p.guest === you ? "me" : ""}>
-                <span>{name(p.guest)}</span>
-                <span>{p.amounts.join(" + ")}</span>
-                <span>{f.choices[p.guest]}</span>
-                {f.award[p.guest]! > 0 && <span>+{f.award[p.guest]} favours</span>}
-              </li>
-            ))}
-          </ol>
-          <p>{f.reached ? "The pot reached the target." : "The pot missed the target."}</p>
-        </>
-      )}
-      {pledge.stage !== "final" && (
-        <p>
-          Buy points ({buyRate} each):{" "}
-          <input type="number" min={1} max={favours} value={spend} onChange={(e) => setSpend(Math.max(1, Math.floor(Number(e.target.value))))} style={{ width: "4rem" }} />
-          <button disabled={favours < 1 || spend > favours} onClick={() => act({ type: "buyPoints", favours: spend })}>Spend favours</button>
-        </p>
-      )}
     </>
   );
 }
@@ -281,7 +238,7 @@ export function Game({ view, offset, act, error, talk, cover }: { view: Exclude<
   return (
     <div className="salon">
     <main>
-      {view.phase !== "lastDance" && view.phase !== "vote" && <PhaseRail phase={view.phase} />}
+      {view.phase !== "lastDance" && <PhaseRail phase={view.phase} />}
       {view.phase === "mingle" && (
         <>
           <h1>The Mingle</h1>
@@ -297,35 +254,10 @@ export function Game({ view, offset, act, error, talk, cover }: { view: Exclude<
       {view.phase === "dance" && (
         <>
           <h1>{view.announcement.name}</h1>
-          {view.pick ? <PickPanel pick={view.pick} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.pledge ? <PledgePanel pledge={view.pledge} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.auction ? <BidPanel auction={view.auction} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.step ? <StepPanel step={view.step} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : <p>You are watching from the Balcony.</p>}
-          {(!view.pledge || view.ranking.length > 0) && <h2>The running ranking</h2>}
+          {view.bluff ? <ToastPanel bluff={view.bluff} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.auction ? <BidPanel auction={view.auction} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.step ? <StepPanel step={view.step} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : <p>You are watching from the Balcony.</p>}
+          <h2>The running ranking</h2>
           <Ranking ranking={view.ranking} guests={view.guests} you={view.you} />
         </>
-      )}
-      {view.phase === "vote" && (
-        <div className="dimmed">
-          <h1>The Unmasking <em>vote</em></h1>
-          <Candle deadline={view.deadline} length={view.stage === "ballot" ? VOTE_BALLOT_MS : VOTE_REVEAL_MS} now={now} />
-          {view.stage === "ballot" ? (
-            view.canVote ? (
-              <>
-                <p>Mercy unmasks {view.mercy} tonight; Greed unmasks {view.greed} and pays you 2 favours.</p>
-                {view.yourBallot ? <p>You voted. Ballots stay secret until the reveal.</p> : (
-                  <p>
-                    <button onClick={() => act({ type: "vote", choice: "mercy" })}>Mercy ({view.mercy})</button>{" "}
-                    <button onClick={() => act({ type: "vote", choice: "greed" })}>Greed ({view.greed})</button>
-                  </p>
-                )}
-              </>
-            ) : <p>The guests are voting; you are watching from the Balcony.</p>
-          ) : (
-            <>
-              <p>{view.reveal!.mercyWon ? "Mercy wins" : "Greed wins"}: {view.reveal!.count === 0 ? "nobody is unmasked this round." : `${view.reveal!.count} will be unmasked.`}</p>
-              <ul>{view.reveal!.ballots.map((b) => <li key={b.guest} className={b.guest === view.you ? "me" : ""}><Name guests={view.guests} id={b.guest} /> {b.choice}{b.cast ? "" : " (absent)"}</li>)}</ul>
-              <p>You hold <strong>{view.favours}</strong> favours.</p>
-            </>
-          )}
-        </div>
       )}
       {view.phase === "sentDown" && (
         <>
@@ -357,7 +289,7 @@ export function Game({ view, offset, act, error, talk, cover }: { view: Exclude<
         <>
           <h1>{view.announcement.name}</h1>
           <p>{view.unmaskings === 0 ? "Played for practice: nobody is unmasked." : `The lowest ${view.unmaskings} will be unmasked.`}</p>
-          {view.pick ? <PickPanel pick={view.pick} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.step ? <StepPanel step={view.step} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : <p>The Cellar plays; you are watching.</p>}
+          {view.step ? <StepPanel step={view.step} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : <p>The Cellar plays; you are watching.</p>}
           <h2>The running ranking</h2>
           <Ranking ranking={view.ranking} guests={view.guests} you={view.you} />
         </>

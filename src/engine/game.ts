@@ -5,14 +5,8 @@ import {
   QUICK_ROUNDS,
   SENT_DOWN_MS,
   UNMASKING_MS,
-  GREED_REWARD,
-  VOTE_BALLOT_MS,
-  VOTE_REVEAL_MS,
-  type VoteState,
-  type VotePlan,
   type CellarState,
   type GuestRecord,
-  type PickState,
   type RaceState,
   START_FAVOURS,
   type MatchDef,
@@ -30,11 +24,9 @@ import {
 } from "../shared/types";
 import { drawMatch } from "./draw-match";
 import { drawMask } from "./masks";
-import { draw, drawInt } from "./random";
-import { cellarSize, unmaskingsFor, voteChance, voteCounts, type Playable } from "./schedule";
+import { cellarSize, unmaskingsFor } from "./schedule";
 import { advanceAuction, auctionView, bidAuction, buyAuctionPoints, rankAuction, startAuction } from "./auction";
-import { advancePick, buyPickPoints, pickNumber, pickView, rankPick, startPick } from "./pick";
-import { advancePledge, buyPledgePoints, pledgeTo, pledgeView, publicRanking, rankPledge, reckonTo, startPledge } from "./pledge";
+import { advanceBluff, bluffView, buyBluffPoints, callBluff, claimBluff, rankBluff, startBluff } from "./bluff";
 import { advanceRace, answerRace, buyPoints, rankRace, startRace, stepView } from "./race";
 
 /** The rules engine: pure, with no clock, no Math.random and no platform imports. */
@@ -54,14 +46,9 @@ export function newGame(seed: number): GameState {
     danceEncore: false,
     match: null,
     auction: null,
-    pledge: null,
-    pick: null,
+    bluff: null,
     danceResult: null,
     cellar: null,
-    vote: null,
-    votePlan: null,
-    voteHeld: false,
-    voteCount: null,
     gifts: [],
     mingleStandings: {},
     rooms: [],
@@ -95,54 +82,27 @@ export function apply(state: GameState, action: Action, now: number): ApplyResul
       next.deadline = next.auction!.deadline;
       return { ok: true, state: next };
     }
-    case "pick": {
+    case "claim":
+    case "call": {
       const found = findPlayer(state, action.guest);
       if (typeof found === "string") return reject(found);
-      if (!activePick(state)) return reject("no pick is running");
+      if (!activeBluff(state)) return reject("no toast is running");
       const next = structuredClone(state);
-      const why = pickNumber(activePick(next)!, action.guest, action.number, now);
+      const why = action.type === "claim" ? claimBluff(next.bluff!, action.guest, action.value, now) : callBluff(next.bluff!, action.guest, action.target, now);
       if (why) return reject(why);
-      next.deadline = activePick(next)!.deadline;
-      return { ok: true, state: next };
-    }
-    case "pledge":
-    case "reckon": {
-      const found = findPlayer(state, action.guest);
-      if (typeof found === "string") return reject(found);
-      if (!activePledge(state)) return reject("no pledge is running");
-      const next = structuredClone(state);
-      const why = action.type === "pledge" ? pledgeTo(next.pledge!, action.guest, action.amount, now) : reckonTo(next.pledge!, action.guest, action.choice, now);
-      if (why) return reject(why);
-      next.deadline = next.pledge!.deadline;
-      return { ok: true, state: next };
-    }
-    case "vote": {
-      const me = state.guests.find((g) => g.id === action.guest);
-      if (!me) return reject("no such guest");
-      const vote = state.vote;
-      if (state.phase !== "vote" || !vote || vote.stage !== "ballot") return reject("no vote is running");
-      if (me.unmaskedIn !== undefined) return reject("no such guest");
-      if (action.choice !== "mercy" && action.choice !== "greed") return reject("no such choice");
-      if (now >= vote.deadline) return reject("too late");
-      if (action.guest in vote.ballots) return reject("already voted");
-      const next = structuredClone(state);
-      next.vote!.ballots[action.guest] = action.choice;
+      next.deadline = next.bluff!.deadline;
       return { ok: true, state: next };
     }
     case "buyPoints": {
-      // Greed's reward is usable at once, in the Dance the vote paused.
-      const live = (s: GameState): GameState => (pausedDance(s) ? { ...s, phase: "dance" } : s);
-      const found = findPlayer(live(state), action.guest);
+      const found = findPlayer(state, action.guest);
       if (typeof found === "string") return reject(found);
       if (!Number.isInteger(action.favours) || action.favours < 1) return reject("bad amount");
       if (action.favours > found.favours) return reject("not enough favours");
       const next = structuredClone(state);
       next.guests.find((g) => g.id === action.guest)!.favours -= action.favours;
-      const at = live(next);
-      if (activeAuction(at)) buyAuctionPoints(next.auction!, action.guest, action.favours);
-      else if (activePledge(at)) buyPledgePoints(next.pledge!, action.guest, action.favours);
-      else if (activePick(at)) buyPickPoints(activePick(at)!, action.guest, action.favours);
-      else buyPoints(activeRace(at)!, action.guest, action.favours);
+      if (activeAuction(next)) buyAuctionPoints(next.auction!, action.guest, action.favours);
+      else if (activeBluff(next)) buyBluffPoints(next.bluff!, action.guest, action.favours);
+      else buyPoints(activeRace(next)!, action.guest, action.favours);
       return { ok: true, state: next };
     }
     case "gift": {
@@ -216,7 +176,7 @@ export function apply(state: GameState, action: Action, now: number): ApplyResul
       if (!fitsFormat(state)) return reject("need 4-10 guests to start");
       const dance = drawDance({ ...state, round: 1 });
       if (!dance) return reject("need 4-10 guests to start");
-      return { ok: true, state: openRound({ ...dance, round: 1 }, now) };
+      return { ok: true, state: openMingle({ ...dance, round: 1 }, now) };
     }
   }
 }
@@ -231,27 +191,17 @@ function activeRace(state: GameState): RaceState | null {
   return null;
 }
 
-/** The vote's reveal is up and it came during a Dance: the match waits, its favours open to spend. */
-const pausedDance = (state: GameState) => state.phase === "vote" && state.vote!.during === "dance" && state.vote!.stage === "reveal";
-
 /** The Sealed bid Dance running right now: only while the Dance phase lasts. */
 const activeAuction = (state: GameState) => (state.phase === "dance" ? state.auction : null);
 
-/** The Group target Dance running right now: only while the Dance phase lasts. */
-const activePledge = (state: GameState) => (state.phase === "dance" ? state.pledge : null);
-
-/** The Unique pick match running right now: the Dance, or the Cellar game. */
-function activePick(state: GameState): PickState | null {
-  if (state.phase === "dance") return state.pick;
-  if (state.phase === "cellar") return state.cellar!.pick;
-  return null;
-}
+/** The Bluff Dance running right now: only while the Dance phase lasts. */
+const activeBluff = (state: GameState) => (state.phase === "dance" ? state.bluff : null);
 
 /** The seated guest taking part in the running match, or why they can't. */
 function findPlayer(state: GameState, id: GuestId): GuestRecord | Rejection {
   const me = state.guests.find((g) => g.id === id);
   if (!me) return "no such guest";
-  const running = activeAuction(state) ?? activePledge(state) ?? activePick(state) ?? activeRace(state);
+  const running = activeAuction(state) ?? activeBluff(state) ?? activeRace(state);
   if (!running) return "no Dance is running";
   return id in running.points ? me : "not playing in this match";
 }
@@ -267,8 +217,7 @@ function drawDance(state: GameState): GameState | null {
     danceEncore: drawn.encore,
     match: null,
     auction: null,
-    pledge: null,
-    pick: null,
+    bluff: null,
     danceResult: null,
     cellar: null,
     drawn: [...state.drawn, { round: state.round, role: "dance", id: drawn.match.id }],
@@ -293,16 +242,11 @@ function tick(state: GameState, now: number): GameState {
     if (s.phase === "mingle") {
       const def = s.danceDef as MatchDef;
       const guests = remaining(s).map((g) => g.id);
-      if (def.type === "groupTarget") {
-        const [pledge, seed] = startPledge(s.seed, def, guests, at);
+      if (def.type === "bluff") {
+        const [bluff, seed] = startBluff(s.seed, def, guests, at);
         s.seed = seed;
-        s.pledge = pledge;
-        s.deadline = pledge.deadline;
-      } else if (def.type === "uniquePick") {
-        const [pick, seed] = startPick(s.seed, def, guests, at, def.steps.dance!);
-        s.seed = seed;
-        s.pick = pick;
-        s.deadline = pick.deadline;
+        s.bluff = bluff;
+        s.deadline = bluff.deadline;
       } else if (def.type === "sealedBid") {
         const [auction, seed] = startAuction(s.seed, def, guests, at);
         s.seed = seed;
@@ -315,57 +259,24 @@ function tick(state: GameState, now: number): GameState {
         s.deadline = race.deadline;
       }
       s.phase = "dance";
-      if (s.votePlan) {
-        // Equal odds at every boundary between steps.
-        const boundaries = stepsOf(s.pledge ?? s.auction ?? s.pick ?? s.match!) - 1;
-        if (boundaries < 1) s.votePlan = null;
-        else [s.votePlan.afterStep, s.seed] = drawInt(s.seed, 0, boundaries - 1);
-      }
     } else if (s.phase === "dance") {
-      const running = s.pledge ?? s.auction ?? s.pick ?? s.match!;
-      // The vote waits for the step to end, then the match waits for the vote.
-      if (s.votePlan && running.stage === "reveal" && running.step === s.votePlan.afterStep) {
-        openVote(s, at, "dance", s.votePlan);
-        continue;
-      }
-      const more = s.pledge ? advancePledge(s.pledge, at) : s.auction ? advanceAuction(s.auction, at) : s.pick ? advancePick(s.pick, at) : advanceRace(s.match!, at);
+      const running = s.bluff ?? s.auction ?? s.match!;
+      const more = s.bluff ? advanceBluff(s.bluff, at) : s.auction ? advanceAuction(s.auction, at) : advanceRace(s.match!, at);
       if (more) s.deadline = running.deadline;
       else sendDown(s, at);
-    } else if (s.phase === "vote") {
-      const v = s.vote!;
-      if (v.stage === "ballot") closeBallot(s, at);
-      else {
-        s.vote = null;
-        if (v.during === "start") s = openMingle(s, at);
-        else {
-          // The match picks up where it stopped, its next step on fresh deadlines.
-          const running = s.pledge ?? s.auction ?? s.pick ?? s.match!;
-          if (s.pledge ? advancePledge(s.pledge, at) : s.auction ? advanceAuction(s.auction, at) : s.pick ? advancePick(s.pick, at) : advanceRace(s.match!, at)) {
-            s.phase = "dance";
-            s.deadline = running.deadline;
-          } else sendDown(s, at);
-        }
-      }
     } else if (s.phase === "sentDown") {
       const c = s.cellar!;
-      let running: { deadline: number };
-      if (c.def.type === "uniquePick") {
-        const [pick, seed] = startPick(s.seed, c.def, c.guests, at, c.def.steps.cellar!);
-        s.seed = seed;
-        c.pick = running = pick;
-      } else if (c.def.type === "race") {
-        const [race, seed] = startRace(s.seed, c.def, c.guests, at, c.def.steps.cellar!);
-        s.seed = seed;
-        c.race = running = race;
-      } else throw new Error(`${c.def.name} can't be a Cellar game`);
+      if (c.def.type !== "race") throw new Error(`${c.def.name} can't be a Cellar game`);
+      const [race, seed] = startRace(s.seed, c.def, c.guests, at, c.def.steps.cellar!);
+      s.seed = seed;
+      c.race = race;
       s.cellarTalks.push({ id: `cellar-${s.round}`, members: [...c.guests] });
       s.match = null;
       s.phase = "cellar";
-      s.deadline = running.deadline;
+      s.deadline = race.deadline;
     } else if (s.phase === "cellar") {
-      const c = s.cellar!;
-      const running = c.pick ?? c.race!;
-      if (c.pick ? advancePick(c.pick, at) : advanceRace(c.race!, at)) s.deadline = running.deadline;
+      const race = s.cellar!.race!;
+      if (advanceRace(race, at)) s.deadline = race.deadline;
       else unmask(s, at);
     } else if (s.phase === "unmasking") {
       s = nextRound(s, at);
@@ -376,22 +287,20 @@ function tick(state: GameState, now: number): GameState {
 
 /** The Dance's strict ranking sets the payout (favours never go below 0), then the lower half is sent down. */
 function sendDown(s: GameState, at: number): void {
-  const ranking = s.pledge ? rankPledge(s.pledge) : s.auction ? rankAuction(s.auction) : s.pick ? rankPick(s.pick) : rankRace(s.match!);
-  // The payout table sets favours, except in The Pledge, whose own award takes its place.
+  const ranking = s.bluff ? rankBluff(s.bluff) : s.auction ? rankAuction(s.auction) : rankRace(s.match!);
   const table = DANCE_PAYOUTS[ranking.length]!;
   const payout: Record<GuestId, number> = {};
   ranking.forEach((r, i) => {
-    payout[r.guest] = s.pledge ? s.pledge.award![r.guest]! : table[i]!;
+    payout[r.guest] = table[i]!;
     const g = s.guests.find((x) => x.id === r.guest)!;
-    g.favours = Math.max(0, g.favours + payout[r.guest]!);
+    g.favours = Math.max(0, g.favours + table[i]!);
   });
   s.danceResult = { ranking, payout };
   s.auction = null;
-  s.pledge = null;
-  s.pick = null;
+  s.bluff = null;
 
   const left = remaining(s);
-  const unmaskings = s.voteCount ?? unmaskingsFor({ remaining: left.length, unmaskings: left.length - 2, rounds: s.rounds - s.round + 1 });
+  const unmaskings = unmaskingsFor({ remaining: left.length, unmaskings: left.length - 2, rounds: s.rounds - s.round + 1 });
   const size = cellarSize(left.length, unmaskings);
   // Fewest favours first; on equal favours the lower Dance place goes down first.
   const place = (id: GuestId) => ranking.findIndex((r) => r.guest === id);
@@ -402,7 +311,7 @@ function sendDown(s: GameState, at: number): void {
     failNoCellarGame(size);
   s.seed = drawn.seed;
   s.drawn.push({ round: s.round, role: "cellar", id: drawn.match.id });
-  s.cellar = { def: structuredClone(drawn.match), encore: drawn.encore, guests: down, unmaskings, race: null, pick: null, ranking: null, unmasked: [] };
+  s.cellar = { def: structuredClone(drawn.match), encore: drawn.encore, guests: down, unmaskings, race: null, ranking: null, unmasked: [] };
   s.phase = "sentDown";
   s.deadline = at + SENT_DOWN_MS;
 }
@@ -414,7 +323,7 @@ function failNoCellarGame(size: number): never {
 /** The Cellar game's lowest-ranked are unmasked: their mask floats off and their favours vanish. */
 function unmask(s: GameState, at: number): void {
   const c = s.cellar!;
-  c.ranking = c.pick ? rankPick(c.pick) : rankRace(c.race!);
+  c.ranking = rankRace(c.race!);
   c.unmasked = c.unmaskings === 0 ? [] : c.ranking.slice(-c.unmaskings).map((r) => r.guest);
   for (const g of s.guests) if (c.unmasked.includes(g.id)) Object.assign(g, { unmaskedIn: s.round, favours: 0 });
   for (const room of s.rooms) {
@@ -432,71 +341,7 @@ function nextRound(s: GameState, at: number): GameState {
   if (s.round >= s.rounds) return { ...s, phase: "lastDance", deadline: null };
   const next = drawDance({ ...s, round: s.round + 1 });
   if (!next) throw new Error("the library has no Dance for the guests left");
-  return openRound(next, at);
-}
-
-/** The guest counts the library can play, as the Unmasking schedule asks. */
-const CAN_PLAY: Playable = {
-  dance: (n) => LIBRARY.some((m) => m.guestRange.dance && n >= m.guestRange.dance[0] && n <= m.guestRange.dance[1]),
-  cellar: (n) => LIBRARY.some((m) => m.guestRange.cellar && n >= m.guestRange.cellar[0] && n <= m.guestRange.cellar[1]),
-};
-
-/** How many steps a running match has, the Group target's reckoning included. */
-const stepsOf = (m: { def: MatchDef } & object): number => {
-  const x = m as PickState | RaceState | { lots: number[] } | { def: { pledgeSteps: number } };
-  if ("lots" in x) return x.lots.length;
-  if ("problems" in x) return x.problems.length;
-  if ("total" in x) return x.total;
-  return x.def.pledgeSteps + 1;
-};
-
-/**
- * Opens a round from its Dance announcement. The seed decides, unannounced, whether an Unmasking vote comes:
- * with a chance of (remaining guests − 2) ÷ 8, at the start of the round or between two steps of its Dance with
- * equal odds, never in the last round, and always in the second-to-last if none has come yet.
- */
-function openRound(s: GameState, at: number): GameState {
-  const [roll, seed1] = draw(s.seed);
-  const [timing, seed2] = draw(seed1);
-  const left = remaining(s).length;
-  const counts = s.round < s.rounds ? voteCounts({ remaining: left, rounds: s.rounds - s.round + 1 }, CAN_PLAY) : null;
-  const held = !!counts && (roll < voteChance(left) || (s.round === s.rounds - 1 && !s.voteHeld));
-  const next: GameState = { ...s, seed: seed2, vote: null, votePlan: null, voteCount: null };
-  if (!held) return openMingle(next, at);
-  if (timing < 0.5) {
-    openVote(next, at, "start", counts);
-    return next;
-  }
-  next.votePlan = { afterStep: null, ...counts };
   return openMingle(next, at);
-}
-
-/** Starts the secret ballot; the stage dims. */
-function openVote(s: GameState, at: number, during: VoteState["during"], counts: Pick<VotePlan, "mercy" | "greed">): void {
-  s.vote = { during, mercy: counts.mercy, greed: counts.greed, stage: "ballot", deadline: at + VOTE_BALLOT_MS, ballots: {}, result: null };
-  s.votePlan = null;
-  s.voteHeld = true;
-  s.phase = "vote";
-  s.deadline = s.vote.deadline;
-}
-
-/**
- * Counts the ballots at `at`. Mercy wins only with a strict majority of the remaining guests; a tie goes to Greed,
- * and a guest who cast nothing counts as Mercy. Every Greed voter is paid at once, whatever the outcome.
- */
-function closeBallot(s: GameState, at: number): void {
-  const v = s.vote!;
-  const guests = remaining(s);
-  const ballots = guests.map((g) => ({ guest: g.id, choice: v.ballots[g.id] ?? ("mercy" as const), cast: g.id in v.ballots }));
-  const mercyVotes = ballots.filter((b) => b.choice === "mercy").length;
-  const mercyWon = mercyVotes * 2 > guests.length;
-  for (const b of ballots) if (b.choice === "greed") s.guests.find((g) => g.id === b.guest)!.favours += GREED_REWARD;
-  const count = mercyWon ? v.mercy : v.greed;
-  v.result = { ballots, mercyWon, count };
-  v.stage = "reveal";
-  v.deadline = at + VOTE_REVEAL_MS;
-  s.voteCount = count;
-  s.deadline = v.deadline;
 }
 
 /** Opens the round's Mingle; its standings are the totals as they stand now. */
@@ -528,9 +373,8 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
     case "dance": {
       const race = state.match;
       const auction = state.auction;
-      const pledge = state.pledge;
-      const pick = state.pick;
-      const playing = guest in (pledge ?? auction ?? pick ?? race!).points;
+      const bluff = state.bluff;
+      const playing = guest in (bluff ?? auction ?? race!).points;
       return {
         ...seated,
         phase: "dance",
@@ -540,28 +384,8 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
         buyRate: def!.buyRate,
         step: race && playing ? stepView(race, guest) : null,
         auction: auction && playing ? auctionView(auction, guest) : null,
-        pledge: pledge && playing ? pledgeView(pledge, guest) : null,
-        pick: pick && playing ? pickView(pick, guest) : null,
-        // The Pledge hides ranks until its final reveal.
-        ranking: pledge ? publicRanking(pledge) : auction ? rankAuction(auction) : pick ? rankPick(pick) : rankRace(race!),
-      };
-    }
-    case "vote": {
-      const v = state.vote!;
-      return {
-        ...seated,
-        phase: "vote",
-        round: state.round,
-        during: v.during,
-        stage: v.stage,
-        dim: true,
-        deadline: v.deadline,
-        favours: me.favours,
-        mercy: v.mercy,
-        greed: v.greed,
-        canVote: me.unmaskedIn === undefined,
-        yourBallot: v.ballots[guest] ?? null,
-        reveal: v.result && { ballots: v.result.ballots.map((b) => ({ ...b })), mercyWon: v.result.mercyWon, count: v.result.count },
+        bluff: bluff && playing ? bluffView(bluff, guest) : null,
+        ranking: bluff ? rankBluff(bluff) : auction ? rankAuction(auction) : rankRace(race!),
       };
     }
     case "sentDown":
@@ -589,9 +413,8 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
         unmaskings: c.unmaskings,
         announcement: cellarGame(),
         buyRate: c.def.buyRate,
-        step: c.race && guest in c.race.points ? stepView(c.race, guest) : null,
-        pick: c.pick && guest in c.pick.points ? pickView(c.pick, guest) : null,
-        ranking: c.pick ? rankPick(c.pick) : rankRace(c.race!),
+        step: guest in c.race!.points ? stepView(c.race!, guest) : null,
+        ranking: rankRace(c.race!),
       };
     }
     case "unmasking":
