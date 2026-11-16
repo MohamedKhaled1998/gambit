@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { MINGLE_MS, SENT_DOWN_MS, UNMASKING_MS, type ClientAction, type GuestView, type StepView, type AuctionView, type PledgeView, type PublicGuest, type RankingEntry } from "../shared/types";
+import { MINGLE_MS, SENT_DOWN_MS, UNMASKING_MS, type ClientAction, type GuestView, type StepView, type AuctionView, type PledgeView, type PickView, type PublicGuest, type RankingEntry } from "../shared/types";
 import { ColourStrip, MaskIcon, maskLabel } from "./mask";
 import { Talk, type TalkLink } from "./talk";
 
@@ -142,6 +142,35 @@ function BidPanel({ auction, guests, you, favours, buyRate, now, act }: { auctio
   );
 }
 
+/** The choice grid and reveal of a Unique pick step. */
+function PickPanel({ pick, guests, you, favours, buyRate, now, act }: { pick: PickView; guests: PublicGuest[]; you: string; favours: number; buyRate: number; now: number; act: Act }) {
+  const [spend, setSpend] = useState(1);
+  const name = (id: string) => guests.find((g) => g.id === id)!.name;
+  const r = pick.reveal;
+  return (
+    <>
+      <p>Step {pick.index + 1} of {pick.total} · you hold {favours} favours</p>
+      <Candle deadline={pick.deadline} length={pick.stage === "pick" ? pick.pickDeadline - pick.startedAt : 5000} now={now} />
+      {pick.stage === "pick" ? (
+        <div className="choices tile-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
+          {Array.from({ length: pick.range }, (_, i) => i + 1).map((n) => (
+            <button key={n} className={n === pick.yourPick ? "picked" : ""} disabled={pick.yourPick !== null} onClick={() => act({ type: "pick", number: n })}>{n}</button>
+          ))}
+        </div>
+      ) : (
+        <ol className="ranking">
+          {r!.picks.map((x) => <li key={x.guest} className={x.guest === you ? "me" : ""}><span>{name(x.guest)}</span><span>{x.number}</span><span>{x.unique ? `+${r!.scored[x.guest]}` : "clash"}</span></li>)}
+        </ol>
+      )}
+      <p>
+        Buy points ({buyRate} each):{" "}
+        <input type="number" min={1} max={favours} value={spend} onChange={(e) => setSpend(Math.max(1, Math.floor(Number(e.target.value))))} style={{ width: "4rem" }} />
+        <button disabled={favours < 1 || spend > favours} onClick={() => act({ type: "buyPoints", favours: spend })}>Spend favours</button>
+      </p>
+    </>
+  );
+}
+
 /** The pledge entry, reckoning choice and reveal screens of a Group target step. */
 function PledgePanel({ pledge, guests, you, favours, buyRate, now, act }: { pledge: PledgeView; guests: PublicGuest[]; you: string; favours: number; buyRate: number; now: number; act: Act }) {
   const [amount, setAmount] = useState(0);
@@ -268,7 +297,7 @@ export function Game({ view, offset, act, error, talk, cover }: { view: Exclude<
       {view.phase === "dance" && (
         <>
           <h1>{view.announcement.name}</h1>
-          {view.pledge ? <PledgePanel pledge={view.pledge} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.auction ? <BidPanel auction={view.auction} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.step ? <StepPanel step={view.step} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : <p>You are watching from the Balcony.</p>}
+          {view.pick ? <PickPanel pick={view.pick} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.pledge ? <PledgePanel pledge={view.pledge} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.auction ? <BidPanel auction={view.auction} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.step ? <StepPanel step={view.step} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : <p>You are watching from the Balcony.</p>}
           {(!view.pledge || view.ranking.length > 0) && <h2>The running ranking</h2>}
           <Ranking ranking={view.ranking} guests={view.guests} you={view.you} />
         </>
@@ -303,7 +332,7 @@ export function Game({ view, offset, act, error, talk, cover }: { view: Exclude<
         <>
           <h1>{view.announcement.name}</h1>
           <p>{view.unmaskings === 0 ? "Played for practice: nobody is unmasked." : `The lowest ${view.unmaskings} will be unmasked.`}</p>
-          {view.step ? <StepPanel step={view.step} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : <p>The Cellar plays; you are watching.</p>}
+          {view.pick ? <PickPanel pick={view.pick} guests={view.guests} you={view.you} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : view.step ? <StepPanel step={view.step} favours={view.favours} buyRate={view.buyRate} now={now} act={act} /> : <p>The Cellar plays; you are watching.</p>}
           <h2>The running ranking</h2>
           <Ranking ranking={view.ranking} guests={view.guests} you={view.you} />
         </>

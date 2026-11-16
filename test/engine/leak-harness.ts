@@ -29,6 +29,16 @@ export const CASES: LeakCase[] = [
     },
   },
   {
+    name: "a pick before the reveal",
+    phases: ["dance", "cellar"],
+    setState: (s, id, v) => {
+      const p = s.phase === "cellar" ? s.cellar!.pick : s.pick;
+      if (!p || p.stage !== "pick" || !(id in p.points)) return s;
+      const next = { ...p, picks: { ...p.picks, [id]: 1 + (Math.abs(v) % p.range) } };
+      return s.phase === "cellar" ? { ...s, cellar: { ...s.cellar!, pick: next } } : { ...s, pick: next };
+    },
+  },
+  {
     name: "a pledge before the step's reveal",
     phases: ["dance"],
     setState: (s, id, v) => {
@@ -111,9 +121,11 @@ function arbState(): fc.Arbitrary<GameState> {
           s = (apply(s, { type: "tick" }, s.deadline!) as { state: GameState }).state;
           // Some guests answer, and the clock runs on a few steps.
           for (let k = 0; k < steps; k++) {
-            const m = (s.match ?? s.auction ?? s.pledge)!;
+            const m = (s.match ?? s.auction ?? s.pledge ?? s.pick)!;
             const guest = `g${k % n}`;
-            const act: Action = s.pledge
+            const act: Action = s.pick
+              ? { type: "pick", guest, number: 1 + (k % 6) }
+              : s.pledge
               ? s.pledge.stage === "reckon" ? { type: "reckon", guest, choice: k % 2 ? "pocket" : "share" } : { type: "pledge", guest, amount: (k * 7) % 11 }
               : s.auction ? { type: "bid", guest, amount: (k * 7) % 51 } : { type: "answer", guest, position: k % 4 };
             const a = apply(s, act, m.stepStartedAt + 1000);
@@ -125,8 +137,9 @@ function arbState(): fc.Arbitrary<GameState> {
           // Run the Dance out, through being sent down, into the Cellar game with a few answers in.
           while (s.phase !== "cellar") s = (apply(s, { type: "tick" }, s.deadline!) as { state: GameState }).state;
           for (let k = 0; k < steps; k++) {
-            const race = s.cellar!.race!;
-            const a = apply(s, { type: "answer", guest: s.cellar!.guests[k % s.cellar!.guests.length]!, position: k % 4 }, race.stepStartedAt + 1000);
+            const running = s.cellar!.pick ?? s.cellar!.race!;
+            const who = s.cellar!.guests[k % s.cellar!.guests.length]!;
+            const a = apply(s, s.cellar!.pick ? { type: "pick", guest: who, number: 1 + (k % 6) } : { type: "answer", guest: who, position: k % 4 }, running.stepStartedAt + 1000);
             if (a.ok) s = a.state;
             if (k % 2) s = (apply(s, { type: "tick" }, s.deadline!) as { state: GameState }).state;
           }

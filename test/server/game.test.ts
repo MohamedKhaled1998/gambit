@@ -175,7 +175,7 @@ describe("the clock", () => {
     for (let tries = 0; ; tries++) {
       const game = await startedAnyGame();
       const name = (game.host.lastView() as Extract<GuestView, { phase: "mingle" }>).announcement.name;
-      if (!["Gilded Auction", "The Pledge"].includes(name) || tries >= 40) return game;
+      if (!["Gilded Auction", "The Pledge", "Wallflower"].includes(name) || tries >= 40) return game;
     }
   }
   async function startedAnyGame() {

@@ -7,6 +7,7 @@ import {
   UNMASKING_MS,
   type CellarState,
   type GuestRecord,
+  type PickState,
   type RaceState,
   START_FAVOURS,
   type MatchDef,
@@ -26,6 +27,7 @@ import { drawMatch } from "./draw-match";
 import { drawMask } from "./masks";
 import { cellarSize, unmaskingsFor } from "./schedule";
 import { advanceAuction, auctionView, bidAuction, buyAuctionPoints, rankAuction, startAuction } from "./auction";
+import { advancePick, buyPickPoints, pickNumber, pickView, rankPick, startPick } from "./pick";
 import { advancePledge, buyPledgePoints, pledgeTo, pledgeView, publicRanking, rankPledge, reckonTo, startPledge } from "./pledge";
 import { advanceRace, answerRace, buyPoints, rankRace, startRace, stepView } from "./race";
 
@@ -47,6 +49,7 @@ export function newGame(seed: number): GameState {
     match: null,
     auction: null,
     pledge: null,
+    pick: null,
     danceResult: null,
     cellar: null,
     gifts: [],
@@ -82,6 +85,16 @@ export function apply(state: GameState, action: Action, now: number): ApplyResul
       next.deadline = next.auction!.deadline;
       return { ok: true, state: next };
     }
+    case "pick": {
+      const found = findPlayer(state, action.guest);
+      if (typeof found === "string") return reject(found);
+      if (!activePick(state)) return reject("no pick is running");
+      const next = structuredClone(state);
+      const why = pickNumber(activePick(next)!, action.guest, action.number, now);
+      if (why) return reject(why);
+      next.deadline = activePick(next)!.deadline;
+      return { ok: true, state: next };
+    }
     case "pledge":
     case "reckon": {
       const found = findPlayer(state, action.guest);
@@ -102,6 +115,7 @@ export function apply(state: GameState, action: Action, now: number): ApplyResul
       next.guests.find((g) => g.id === action.guest)!.favours -= action.favours;
       if (activeAuction(next)) buyAuctionPoints(next.auction!, action.guest, action.favours);
       else if (activePledge(next)) buyPledgePoints(next.pledge!, action.guest, action.favours);
+      else if (activePick(next)) buyPickPoints(activePick(next)!, action.guest, action.favours);
       else buyPoints(activeRace(next)!, action.guest, action.favours);
       return { ok: true, state: next };
     }
@@ -197,11 +211,18 @@ const activeAuction = (state: GameState) => (state.phase === "dance" ? state.auc
 /** The Group target Dance running right now: only while the Dance phase lasts. */
 const activePledge = (state: GameState) => (state.phase === "dance" ? state.pledge : null);
 
+/** The Unique pick match running right now: the Dance, or the Cellar game. */
+function activePick(state: GameState): PickState | null {
+  if (state.phase === "dance") return state.pick;
+  if (state.phase === "cellar") return state.cellar!.pick;
+  return null;
+}
+
 /** The seated guest taking part in the running match, or why they can't. */
 function findPlayer(state: GameState, id: GuestId): GuestRecord | Rejection {
   const me = state.guests.find((g) => g.id === id);
   if (!me) return "no such guest";
-  const running = activeAuction(state) ?? activePledge(state) ?? activeRace(state);
+  const running = activeAuction(state) ?? activePledge(state) ?? activePick(state) ?? activeRace(state);
   if (!running) return "no Dance is running";
   return id in running.points ? me : "not playing in this match";
 }
@@ -218,6 +239,7 @@ function drawDance(state: GameState): GameState | null {
     match: null,
     auction: null,
     pledge: null,
+    pick: null,
     danceResult: null,
     cellar: null,
     drawn: [...state.drawn, { round: state.round, role: "dance", id: drawn.match.id }],
@@ -247,6 +269,11 @@ function tick(state: GameState, now: number): GameState {
         s.seed = seed;
         s.pledge = pledge;
         s.deadline = pledge.deadline;
+      } else if (def.type === "uniquePick") {
+        const [pick, seed] = startPick(s.seed, def, guests, at, def.steps.dance!);
+        s.seed = seed;
+        s.pick = pick;
+        s.deadline = pick.deadline;
       } else if (def.type === "sealedBid") {
         const [auction, seed] = startAuction(s.seed, def, guests, at);
         s.seed = seed;
@@ -260,23 +287,30 @@ function tick(state: GameState, now: number): GameState {
       }
       s.phase = "dance";
     } else if (s.phase === "dance") {
-      const running = s.pledge ?? s.auction ?? s.match!;
-      const more = s.pledge ? advancePledge(s.pledge, at) : s.auction ? advanceAuction(s.auction, at) : advanceRace(s.match!, at);
+      const running = s.pledge ?? s.auction ?? s.pick ?? s.match!;
+      const more = s.pledge ? advancePledge(s.pledge, at) : s.auction ? advanceAuction(s.auction, at) : s.pick ? advancePick(s.pick, at) : advanceRace(s.match!, at);
       if (more) s.deadline = running.deadline;
       else sendDown(s, at);
     } else if (s.phase === "sentDown") {
       const c = s.cellar!;
-      if (c.def.type !== "race") throw new Error(`${c.def.name} can't be a Cellar game`);
-      const [race, seed] = startRace(s.seed, c.def, c.guests, at, c.def.steps.cellar!);
-      s.seed = seed;
-      c.race = race;
+      let running: { deadline: number };
+      if (c.def.type === "uniquePick") {
+        const [pick, seed] = startPick(s.seed, c.def, c.guests, at, c.def.steps.cellar!);
+        s.seed = seed;
+        c.pick = running = pick;
+      } else if (c.def.type === "race") {
+        const [race, seed] = startRace(s.seed, c.def, c.guests, at, c.def.steps.cellar!);
+        s.seed = seed;
+        c.race = running = race;
+      } else throw new Error(`${c.def.name} can't be a Cellar game`);
       s.cellarTalks.push({ id: `cellar-${s.round}`, members: [...c.guests] });
       s.match = null;
       s.phase = "cellar";
-      s.deadline = race.deadline;
+      s.deadline = running.deadline;
     } else if (s.phase === "cellar") {
-      const race = s.cellar!.race!;
-      if (advanceRace(race, at)) s.deadline = race.deadline;
+      const c = s.cellar!;
+      const running = c.pick ?? c.race!;
+      if (c.pick ? advancePick(c.pick, at) : advanceRace(c.race!, at)) s.deadline = running.deadline;
       else unmask(s, at);
     } else if (s.phase === "unmasking") {
       s = nextRound(s, at);
@@ -287,7 +321,7 @@ function tick(state: GameState, now: number): GameState {
 
 /** The Dance's strict ranking sets the payout (favours never go below 0), then the lower half is sent down. */
 function sendDown(s: GameState, at: number): void {
-  const ranking = s.pledge ? rankPledge(s.pledge) : s.auction ? rankAuction(s.auction) : rankRace(s.match!);
+  const ranking = s.pledge ? rankPledge(s.pledge) : s.auction ? rankAuction(s.auction) : s.pick ? rankPick(s.pick) : rankRace(s.match!);
   // The payout table sets favours, except in The Pledge, whose own award takes its place.
   const table = DANCE_PAYOUTS[ranking.length]!;
   const payout: Record<GuestId, number> = {};
@@ -299,6 +333,7 @@ function sendDown(s: GameState, at: number): void {
   s.danceResult = { ranking, payout };
   s.auction = null;
   s.pledge = null;
+  s.pick = null;
 
   const left = remaining(s);
   const unmaskings = unmaskingsFor({ remaining: left.length, unmaskings: left.length - 2, rounds: s.rounds - s.round + 1 });
@@ -312,7 +347,7 @@ function sendDown(s: GameState, at: number): void {
     failNoCellarGame(size);
   s.seed = drawn.seed;
   s.drawn.push({ round: s.round, role: "cellar", id: drawn.match.id });
-  s.cellar = { def: structuredClone(drawn.match), encore: drawn.encore, guests: down, unmaskings, race: null, ranking: null, unmasked: [] };
+  s.cellar = { def: structuredClone(drawn.match), encore: drawn.encore, guests: down, unmaskings, race: null, pick: null, ranking: null, unmasked: [] };
   s.phase = "sentDown";
   s.deadline = at + SENT_DOWN_MS;
 }
@@ -324,7 +359,7 @@ function failNoCellarGame(size: number): never {
 /** The Cellar game's lowest-ranked are unmasked: their mask floats off and their favours vanish. */
 function unmask(s: GameState, at: number): void {
   const c = s.cellar!;
-  c.ranking = rankRace(c.race!);
+  c.ranking = c.pick ? rankPick(c.pick) : rankRace(c.race!);
   c.unmasked = c.unmaskings === 0 ? [] : c.ranking.slice(-c.unmaskings).map((r) => r.guest);
   for (const g of s.guests) if (c.unmasked.includes(g.id)) Object.assign(g, { unmaskedIn: s.round, favours: 0 });
   for (const room of s.rooms) {
@@ -375,7 +410,8 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
       const race = state.match;
       const auction = state.auction;
       const pledge = state.pledge;
-      const playing = guest in (pledge ?? auction ?? race!).points;
+      const pick = state.pick;
+      const playing = guest in (pledge ?? auction ?? pick ?? race!).points;
       return {
         ...seated,
         phase: "dance",
@@ -386,8 +422,9 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
         step: race && playing ? stepView(race, guest) : null,
         auction: auction && playing ? auctionView(auction, guest) : null,
         pledge: pledge && playing ? pledgeView(pledge, guest) : null,
+        pick: pick && playing ? pickView(pick, guest) : null,
         // The Pledge hides ranks until its final reveal.
-        ranking: pledge ? publicRanking(pledge) : auction ? rankAuction(auction) : rankRace(race!),
+        ranking: pledge ? publicRanking(pledge) : auction ? rankAuction(auction) : pick ? rankPick(pick) : rankRace(race!),
       };
     }
     case "sentDown":
@@ -415,8 +452,9 @@ export function viewFor(state: GameState, guest: GuestId): GuestView | null {
         unmaskings: c.unmaskings,
         announcement: cellarGame(),
         buyRate: c.def.buyRate,
-        step: guest in c.race!.points ? stepView(c.race!, guest) : null,
-        ranking: rankRace(c.race!),
+        step: c.race && guest in c.race.points ? stepView(c.race, guest) : null,
+        pick: c.pick && guest in c.pick.points ? pickView(c.pick, guest) : null,
+        ranking: c.pick ? rankPick(c.pick) : rankRace(c.race!),
       };
     }
     case "unmasking":

@@ -52,6 +52,18 @@ function playPledge(s: GameState): GameState {
   return s;
 }
 
+/** Plays a Unique pick match (Dance or Cellar game) to its end: a guest-dependent pick each step. */
+function playPick(s: GameState): GameState {
+  const phase = s.phase;
+  const live = (x: GameState) => (phase === "dance" ? x.pick : x.cellar?.pick) ?? null;
+  while (s.phase === phase) {
+    const p = live(s)!;
+    if (p.stage === "pick") for (const id of Object.keys(p.points)) if (s.phase === phase && live(s)!.stage === "pick") s = must(s, { type: "pick", guest: id, number: 1 + ((Number(id.slice(1)) * 5 + p.step * 2) % p.range) }, p.stepStartedAt + 1000);
+    s = tickToDeadline(s);
+  }
+  return s;
+}
+
 /** The guests playing the running match: everyone in a Dance, the Cellar in a Cellar game. */
 const players = (s: GameState) => Object.keys((s.phase === "dance" ? s.match! : s.cellar!.race!).points);
 
@@ -60,6 +72,7 @@ export function playMatch(s: GameState, play: Player): GameState {
   const phase = s.phase;
   if (phase === "dance" && s.auction) return playAuction(s);
   if (phase === "dance" && s.pledge) return playPledge(s);
+  if ((phase === "dance" && s.pick) || (phase === "cellar" && s.cellar!.pick)) return playPick(s);
   while (s.phase === phase) {
     const race = phase === "dance" ? s.match! : s.cellar!.race!;
     if (race.stage === "answer") {

@@ -153,7 +153,53 @@ export interface GroupTargetMatchDef {
   oncePerGame?: boolean;
   masks?: boolean;
 }
-export type MatchDef = RaceMatchDef | SealedBidMatchDef | GroupTargetMatchDef;
+/** A match on the Unique pick match type: every guest secretly picks a number a step; numbers nobody else picked score. Data only. */
+export interface UniquePickMatchDef {
+  id: string;
+  name: string;
+  type: "uniquePick";
+  rulesSummary: string;
+  workedExample: string;
+  guestRange: { dance: [number, number] | null; cellar: [number, number] | null };
+  steps: { dance: number | null; cellar: number | null };
+  /** The highest number to pick, by guest count: the first band whose `upTo` reaches the guests. */
+  rangeBands: { upTo: number; max: number }[];
+  /** Extra points for the highest unique number. */
+  topBonus: number;
+  studySeconds: number;
+  /** The pick phase. */
+  answerSeconds: number;
+  /** Pick, then the reveal. */
+  stepSeconds: number;
+  preludeSeconds: number;
+  buyRate: number;
+  tieBreak: ("points" | "uniques" | "draw")[];
+  oncePerGame?: boolean;
+  masks?: boolean;
+}
+export type MatchDef = RaceMatchDef | SealedBidMatchDef | GroupTargetMatchDef | UniquePickMatchDef;
+
+/** A Unique pick match running: picks hidden until the step's reveal. */
+export interface PickState {
+  def: UniquePickMatchDef;
+  /** Highest number a guest may pick. */
+  range: number;
+  total: number;
+  step: number;
+  stage: "pick" | "reveal";
+  stepStartedAt: number;
+  pickDeadline: number;
+  /** End of the current stage. */
+  deadline: number;
+  drawKeys: Record<GuestId, number>;
+  /** This step's picks; hidden until the reveal. */
+  picks: Record<GuestId, number>;
+  points: Record<GuestId, number>;
+  /** Unique picks so far. */
+  uniques: Record<GuestId, number>;
+  /** The step just revealed: every pick, and what each guest scored. */
+  last: { picks: { guest: GuestId; number: number; unique: boolean }[]; scored: Record<GuestId, number> } | null;
+}
 
 export type ReckoningChoice = "share" | "pocket";
 
@@ -260,6 +306,8 @@ export interface RankingEntry {
   time: number;
   /** Lots won, in a Sealed bid match. */
   lots?: number;
+  /** Unique picks, in a Unique pick match. */
+  uniques?: number;
   /** True when the draw, not points or time, put this guest ahead of or behind a neighbour. */
   drawn: boolean;
 }
@@ -277,8 +325,10 @@ export interface CellarState {
   guests: GuestId[];
   /** How many this round's Cellar game unmasks; 0 in a warm-up round. */
   unmaskings: number;
-  /** Set when the Cellar game starts. */
+  /** Set when the Cellar game starts, if it is on the Race match type. */
   race: RaceState | null;
+  /** Set when the Cellar game starts, if it is on the Unique pick match type. */
+  pick: PickState | null;
   /** Set when the Cellar game ends. */
   ranking: RankingEntry[] | null;
   unmasked: GuestId[];
@@ -329,6 +379,8 @@ export interface GameState {
   auction: AuctionState | null;
   /** The Dance when it is on the Group target match type. */
   pledge: PledgeState | null;
+  /** The Dance when it is on the Unique pick match type. */
+  pick: PickState | null;
   danceResult: DanceResult | null;
   cellar: CellarState | null;
   /** Every gift given this game. */
@@ -348,6 +400,7 @@ export type Action =
   | { type: "answer"; guest: GuestId; position: number }
   | { type: "bid"; guest: GuestId; amount: number }
   | { type: "pledge"; guest: GuestId; amount: number }
+  | { type: "pick"; guest: GuestId; number: number }
   | { type: "reckon"; guest: GuestId; choice: ReckoningChoice }
   | { type: "buyPoints"; guest: GuestId; favours: number }
   | { type: "gift"; guest: GuestId; to: GuestId; favours: number }
@@ -374,7 +427,10 @@ export type Rejection =
   | "already bid"
   | "no auction is running"
   | "no pledge is running"
+  | "no pick is running"
+  | "picks are whole numbers in the range"
   | "already pledged"
+  | "already picked"
   | "already chose"
   | "pledges are whole points up to your stock"
   | "wait for the reckoning"
@@ -445,6 +501,22 @@ export interface AuctionView {
   reveal: { bids: { guest: GuestId; amount: number }[]; winner: GuestId | null; price: number } | null;
 }
 
+/** A Unique pick step as one guest sees it. */
+export interface PickView {
+  index: number;
+  total: number;
+  stage: "pick" | "reveal";
+  startedAt: number;
+  pickDeadline: number;
+  deadline: number;
+  /** Numbers run 1 to this. */
+  range: number;
+  /** Your own pick, if made; never anyone else's before the reveal. */
+  yourPick: number | null;
+  /** Only once the step is revealed: every pick with names, highest number first, and what each guest scored. */
+  reveal: { picks: { guest: GuestId; number: number; unique: boolean }[]; scored: Record<GuestId, number> } | null;
+}
+
 /** A Group target step as one guest sees it. */
 export interface PledgeView {
   index: number;
@@ -513,6 +585,8 @@ export type GuestView =
       auction: AuctionView | null;
       /** The Group target step; null in other matches and for a guest who isn't playing. */
       pledge: PledgeView | null;
+      /** The Unique pick step; null in other matches and for a guest who isn't playing. */
+      pick: PickView | null;
       /** Public running ranking; bought points show at once. */
       ranking: RankingEntry[];
     })
@@ -542,6 +616,8 @@ export type GuestView =
       buyRate: number;
       /** Only for a guest in the Cellar: the private problem. Free guests watch the ranking alone. */
       step: StepView | null;
+      /** The Unique pick step, when the Cellar game is one. */
+      pick: PickView | null;
       ranking: RankingEntry[];
     })
   | (Seated & {
@@ -601,13 +677,14 @@ export type ClientAction =
   | { type: "answer"; position: number }
   | { type: "bid"; amount: number }
   | { type: "pledge"; amount: number }
+  | { type: "pick"; number: number }
   | { type: "reckon"; choice: ReckoningChoice }
   | { type: "buyPoints"; favours: number }
   | { type: "gift"; to: GuestId; favours: number }
   | { type: "openRoom"; members: GuestId[] }
   | { type: "leaveRoom"; room: string };
 
-const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "bid", "pledge", "reckon", "buyPoints", "gift", "openRoom", "leaveRoom"] satisfies ClientAction["type"][];
+const CLIENT_ACTION_TYPES: readonly string[] = ["removeGuest", "start", "answer", "bid", "pledge", "pick", "reckon", "buyPoints", "gift", "openRoom", "leaveRoom"] satisfies ClientAction["type"][];
 
 /** True only for the actions a client may send; never `tick`, which only the alarm sends. */
 export function isClientAction(value: unknown): value is ClientAction {
